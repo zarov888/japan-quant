@@ -19,7 +19,7 @@ from src.data.fetcher import fetch_universe, fetch_price_history
 from src.model.scorer import score_universe, results_to_dataframe, load_scoring_config
 
 # ── Page ───────────────────────────────────────────────────────
-st.set_page_config(page_title="JVQ", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="JVQ", layout="wide", initial_sidebar_state="expanded")
 
 # ── Bloomberg palette ──────────────────────────────────────────
 BG = "#000000"
@@ -58,22 +58,39 @@ def chart_layout(height=300, **kw):
 st.markdown(f"""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&display=swap');
+
+    /* base */
     .stApp {{ background-color: {BG}; color: {WHITE}; }}
     * {{ font-family: {FONT} !important; }}
+
+    /* global spacing fixes */
+    .block-container {{
+        padding-top: 0.5rem !important;
+        padding-bottom: 0.5rem !important;
+    }}
+    .stMarkdown {{ margin-bottom: 0 !important; }}
+    div[data-testid="stVerticalBlock"] > div {{
+        gap: 0.3rem !important;
+    }}
+    div[data-testid="stHorizontalBlock"] > div {{
+        gap: 0.4rem !important;
+    }}
+    .element-container {{ margin-bottom: 0.2rem !important; }}
 
     /* top bar */
     .bb-top {{
         background: {BG1};
         border-bottom: 1px solid {BORDER};
-        padding: 4px 12px;
+        padding: 6px 12px;
         display: flex;
         align-items: center;
-        gap: 24px;
+        flex-wrap: wrap;
+        gap: 12px;
         font-size: 11px;
-        margin: -1rem -1rem 0 -1rem;
+        margin: -0.5rem -1rem 0.5rem -1rem;
     }}
-    .bb-logo {{ color: {ORANGE}; font-weight: 600; font-size: 13px; letter-spacing: 3px; }}
-    .bb-tag {{ color: {GRAY}; font-size: 10px; }}
+    .bb-logo {{ color: {ORANGE}; font-weight: 600; font-size: 14px; letter-spacing: 3px; }}
+    .bb-tag {{ color: {GRAY}; font-size: 10px; white-space: nowrap; }}
     .bb-live {{ color: {GREEN}; font-size: 10px; }}
 
     /* panels */
@@ -81,7 +98,7 @@ st.markdown(f"""
         background: {BG1};
         border: 1px solid {BORDER};
         padding: 8px 10px;
-        margin-bottom: 4px;
+        margin-bottom: 6px;
         font-size: 11px;
     }}
     .panel-title {{
@@ -96,9 +113,9 @@ st.markdown(f"""
     }}
 
     /* data cells */
-    .dc {{ display: inline-block; min-width: 70px; text-align: right; padding: 1px 6px; }}
+    .dc {{ display: inline-block; min-width: 70px; text-align: right; padding: 2px 6px; }}
     .dc-label {{ color: {GRAY}; font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; }}
-    .dc-val {{ color: {WHITE}; font-size: 12px; font-weight: 500; }}
+    .dc-val {{ color: {WHITE}; font-size: 12px; font-weight: 500; line-height: 1.4; }}
     .dc-green {{ color: {GREEN}; }}
     .dc-red {{ color: {RED}; }}
     .dc-orange {{ color: {ORANGE}; }}
@@ -108,16 +125,18 @@ st.markdown(f"""
     .strip {{
         background: {BG2};
         border: 1px solid {BORDER};
-        padding: 4px 8px;
+        padding: 6px 10px;
         display: flex;
         flex-wrap: wrap;
-        gap: 16px;
+        gap: 14px;
+        row-gap: 4px;
         font-size: 10px;
-        margin-bottom: 6px;
+        margin-bottom: 8px;
+        line-height: 1.6;
     }}
-    .strip-item {{ display: flex; gap: 6px; align-items: baseline; }}
+    .strip-item {{ display: flex; gap: 5px; align-items: baseline; white-space: nowrap; }}
     .strip-label {{ color: {GRAY_DIM}; font-size: 9px; }}
-    .strip-val {{ color: {WHITE}; }}
+    .strip-val {{ color: {WHITE}; font-size: 10px; }}
 
     /* kill streamlit chrome */
     header, footer, #MainMenu {{ visibility: hidden; }}
@@ -127,51 +146,118 @@ st.markdown(f"""
         font-weight: 600 !important;
         letter-spacing: 1.5px;
         text-transform: uppercase;
-        margin: 8px 0 6px 0 !important;
+        margin: 10px 0 8px 0 !important;
         padding-bottom: 4px;
         border-bottom: 1px solid {BORDER};
+        line-height: 1.6 !important;
     }}
 
+    /* metrics */
     [data-testid="stMetric"] {{
         background: {BG1};
         border: 1px solid {BORDER};
-        padding: 6px 10px;
+        padding: 8px 10px;
     }}
     [data-testid="stMetricLabel"] {{
         color: {GRAY} !important;
         font-size: 9px !important;
         letter-spacing: 1px;
         text-transform: uppercase;
+        line-height: 1.4 !important;
+        margin-bottom: 2px !important;
     }}
     [data-testid="stMetricValue"] {{
         color: {ORANGE} !important;
-        font-size: 16px !important;
+        font-size: 15px !important;
+        line-height: 1.3 !important;
     }}
 
+    /* tabs */
     .stTabs [data-baseweb="tab-list"] {{
         background: {BG1};
         border-bottom: 1px solid {BORDER};
         gap: 0;
+        overflow-x: auto;
     }}
     .stTabs [data-baseweb="tab"] {{
         color: {GRAY};
         font-size: 10px;
         letter-spacing: 1px;
         text-transform: uppercase;
-        padding: 6px 16px;
+        padding: 8px 14px;
         border-radius: 0;
+        white-space: nowrap;
     }}
     .stTabs [aria-selected="true"] {{
         color: {ORANGE} !important;
         border-bottom: 2px solid {ORANGE};
     }}
+    .stTabs [data-baseweb="tab-panel"] {{
+        padding-top: 8px !important;
+    }}
 
+    /* sidebar */
     [data-testid="stSidebar"] {{
         background: {BG1};
         border-right: 1px solid {BORDER};
+        padding-top: 0.5rem;
+    }}
+    [data-testid="stSidebar"] .block-container {{
+        padding-top: 0.5rem !important;
+    }}
+    [data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div {{
+        gap: 0.2rem !important;
+    }}
+    [data-testid="stSidebar"] .stSelectbox label,
+    [data-testid="stSidebar"] .stSlider label,
+    [data-testid="stSidebar"] .stMultiSelect label,
+    [data-testid="stSidebar"] .stNumberInput label,
+    [data-testid="stSidebar"] .stCheckbox label {{
+        font-size: 10px !important;
+        color: {GRAY} !important;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }}
+    [data-testid="stSidebar"] .stMarkdown p {{
+        font-size: 10px;
+        margin-bottom: 2px;
     }}
 
-    .stDataFrame {{ border: 1px solid {BORDER}; font-size: 10px; }}
+    /* selectbox / inputs */
+    .stSelectbox, .stMultiSelect, .stSlider, .stNumberInput {{
+        margin-bottom: 2px !important;
+    }}
+    .stSelectbox > div > div,
+    .stMultiSelect > div > div,
+    .stNumberInput > div > div > input {{
+        font-size: 11px !important;
+        background: {BG2} !important;
+        border-color: {BORDER} !important;
+        color: {WHITE} !important;
+    }}
+
+    /* dataframe */
+    .stDataFrame {{
+        border: 1px solid {BORDER};
+        font-size: 10px;
+    }}
+
+    /* plotly charts — reduce bottom gap */
+    .stPlotlyChart {{
+        margin-bottom: 0 !important;
+    }}
+
+    /* equity header override */
+    .eq-header {{
+        background: {BG1};
+        border: 1px solid {BORDER};
+        padding: 8px 14px;
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-bottom: 8px;
+    }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -575,7 +661,7 @@ with t_stk:
 
         # Header strip
         st.markdown(f"""
-        <div class="bb-top" style="margin:0 -1rem; padding:6px 12px;">
+        <div class="eq-header">
             <span style="color:{ORANGE}; font-size:16px; font-weight:600;">{sel_stk}</span>
             <span style="color:{WHITE}; font-size:13px;">{r['Name']}</span>
             <span style="color:{GRAY}; font-size:10px;">{r['Sector']} / {r.get('industry') or '--'}</span>
