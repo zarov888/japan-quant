@@ -1,6 +1,5 @@
 """
-Japan Value Quant Terminal
-Professional multi-factor equity screening and analysis platform.
+JVQ Terminal — Bloomberg-style Japan equity screener.
 """
 from __future__ import annotations
 
@@ -9,7 +8,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
@@ -20,158 +18,204 @@ from src.data.universe import load_universe
 from src.data.fetcher import fetch_universe, fetch_price_history
 from src.model.scorer import score_universe, results_to_dataframe, load_scoring_config
 
-# ── Config ─────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="JVQ Terminal",
-    page_icon="",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+# ── Page ───────────────────────────────────────────────────────
+st.set_page_config(page_title="JVQ", layout="wide", initial_sidebar_state="collapsed")
 
-# ── Terminal Theme ─────────────────────────────────────────────
-CHART_TEMPLATE = dict(
-    layout=dict(
+# ── Bloomberg palette ──────────────────────────────────────────
+BG = "#000000"
+BG1 = "#0a0a0a"
+BG2 = "#111111"
+BORDER = "#1c1c1c"
+ORANGE = "#ff8c00"
+ORANGE_DIM = "#cc7000"
+GREEN = "#00cc66"
+RED = "#ff4444"
+YELLOW = "#cccc00"
+WHITE = "#dddddd"
+GRAY = "#666666"
+GRAY_DIM = "#333333"
+FONT = "'Consolas', 'Menlo', 'Monaco', monospace"
+
+def chart_layout(height=300, **kw):
+    base = dict(
         template="plotly_dark",
-        paper_bgcolor="#0a0a0f",
-        plot_bgcolor="#0a0a0f",
-        font=dict(family="JetBrains Mono, Fira Code, Consolas, monospace", size=11, color="#c8c8c8"),
-        title_font=dict(size=13, color="#8a8a8a"),
-        xaxis=dict(gridcolor="#1a1a2a", zerolinecolor="#1a1a2a"),
-        yaxis=dict(gridcolor="#1a1a2a", zerolinecolor="#1a1a2a"),
-        margin=dict(l=50, r=20, t=40, b=40),
-        colorway=["#00d4aa", "#ff6b6b", "#4ecdc4", "#ffe66d", "#a855f7",
-                   "#06b6d4", "#f97316", "#84cc16", "#ec4899", "#6366f1"],
+        paper_bgcolor=BG1,
+        plot_bgcolor=BG1,
+        font=dict(family=FONT, size=10, color=GRAY),
+        margin=dict(l=45, r=10, t=28, b=30),
+        height=height,
+        xaxis=dict(gridcolor=BORDER, zerolinecolor=BORDER, tickfont=dict(size=9)),
+        yaxis=dict(gridcolor=BORDER, zerolinecolor=BORDER, tickfont=dict(size=9)),
+        title_font=dict(size=11, color=ORANGE),
+        legend=dict(font=dict(size=9), bgcolor="rgba(0,0,0,0)"),
+        showlegend=False,
     )
-)
+    base.update(kw)
+    return base
 
-st.markdown("""
+st.markdown(f"""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&display=swap');
+    .stApp {{ background-color: {BG}; color: {WHITE}; }}
+    * {{ font-family: {FONT} !important; }}
 
-    .stApp {
-        background-color: #0a0a0f;
-        color: #c8c8c8;
-        font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
-    }
+    /* top bar */
+    .bb-top {{
+        background: {BG1};
+        border-bottom: 1px solid {BORDER};
+        padding: 4px 12px;
+        display: flex;
+        align-items: center;
+        gap: 24px;
+        font-size: 11px;
+        margin: -1rem -1rem 0 -1rem;
+    }}
+    .bb-logo {{ color: {ORANGE}; font-weight: 600; font-size: 13px; letter-spacing: 3px; }}
+    .bb-tag {{ color: {GRAY}; font-size: 10px; }}
+    .bb-live {{ color: {GREEN}; font-size: 10px; }}
 
-    /* Header bar */
-    .terminal-header {
-        background: linear-gradient(90deg, #0a0a0f 0%, #0f1420 50%, #0a0a0f 100%);
-        border-bottom: 1px solid #1a1a2a;
-        padding: 8px 16px;
-        margin: -1rem -1rem 1rem -1rem;
-        font-family: 'JetBrains Mono', monospace;
-    }
-    .terminal-header .title {
-        color: #00d4aa;
-        font-size: 14px;
+    /* panels */
+    .panel {{
+        background: {BG1};
+        border: 1px solid {BORDER};
+        padding: 8px 10px;
+        margin-bottom: 4px;
+        font-size: 11px;
+    }}
+    .panel-title {{
+        color: {ORANGE};
+        font-size: 10px;
         font-weight: 600;
-        letter-spacing: 2px;
-    }
-    .terminal-header .subtitle {
-        color: #555;
-        font-size: 11px;
-    }
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        margin-bottom: 6px;
+        padding-bottom: 4px;
+        border-bottom: 1px solid {BORDER};
+    }}
 
-    /* Kill default streamlit styling */
-    h1, h2, h3 {
-        font-family: 'JetBrains Mono', monospace !important;
-        color: #8a8a8a !important;
-        font-weight: 500 !important;
+    /* data cells */
+    .dc {{ display: inline-block; min-width: 70px; text-align: right; padding: 1px 6px; }}
+    .dc-label {{ color: {GRAY}; font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; }}
+    .dc-val {{ color: {WHITE}; font-size: 12px; font-weight: 500; }}
+    .dc-green {{ color: {GREEN}; }}
+    .dc-red {{ color: {RED}; }}
+    .dc-orange {{ color: {ORANGE}; }}
+    .dc-dim {{ color: {GRAY}; }}
+
+    /* strip */
+    .strip {{
+        background: {BG2};
+        border: 1px solid {BORDER};
+        padding: 4px 8px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        font-size: 10px;
+        margin-bottom: 6px;
+    }}
+    .strip-item {{ display: flex; gap: 6px; align-items: baseline; }}
+    .strip-label {{ color: {GRAY_DIM}; font-size: 9px; }}
+    .strip-val {{ color: {WHITE}; }}
+
+    /* kill streamlit chrome */
+    header, footer, #MainMenu {{ visibility: hidden; }}
+    h1,h2,h3 {{
+        font-size: 11px !important;
+        color: {ORANGE} !important;
+        font-weight: 600 !important;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        margin: 8px 0 6px 0 !important;
+        padding-bottom: 4px;
+        border-bottom: 1px solid {BORDER};
+    }}
+
+    [data-testid="stMetric"] {{
+        background: {BG1};
+        border: 1px solid {BORDER};
+        padding: 6px 10px;
+    }}
+    [data-testid="stMetricLabel"] {{
+        color: {GRAY} !important;
+        font-size: 9px !important;
         letter-spacing: 1px;
         text-transform: uppercase;
-        font-size: 13px !important;
-        border-bottom: 1px solid #1a1a2a;
-        padding-bottom: 6px;
-        margin-bottom: 12px !important;
-    }
+    }}
+    [data-testid="stMetricValue"] {{
+        color: {ORANGE} !important;
+        font-size: 16px !important;
+    }}
 
-    /* Metric cards */
-    [data-testid="stMetric"] {
-        background: #0f1118;
-        border: 1px solid #1a1a2a;
-        border-radius: 4px;
-        padding: 10px 14px;
-    }
-    [data-testid="stMetricLabel"] {
-        color: #555 !important;
-        font-size: 10px !important;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-    [data-testid="stMetricValue"] {
-        color: #00d4aa !important;
-        font-family: 'JetBrains Mono', monospace !important;
-        font-size: 18px !important;
-    }
-    [data-testid="stMetricDelta"] {
-        font-family: 'JetBrains Mono', monospace !important;
-    }
-
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        background: #0f1118;
-        border-bottom: 1px solid #1a1a2a;
-        gap: 0px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        color: #555;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 11px;
+    .stTabs [data-baseweb="tab-list"] {{
+        background: {BG1};
+        border-bottom: 1px solid {BORDER};
+        gap: 0;
+    }}
+    .stTabs [data-baseweb="tab"] {{
+        color: {GRAY};
+        font-size: 10px;
         letter-spacing: 1px;
         text-transform: uppercase;
-        padding: 8px 20px;
+        padding: 6px 16px;
         border-radius: 0;
-    }
-    .stTabs [aria-selected="true"] {
-        color: #00d4aa !important;
-        border-bottom: 2px solid #00d4aa;
-        background: transparent;
-    }
+    }}
+    .stTabs [aria-selected="true"] {{
+        color: {ORANGE} !important;
+        border-bottom: 2px solid {ORANGE};
+    }}
 
-    /* Dataframes */
-    .stDataFrame {
-        border: 1px solid #1a1a2a;
-        border-radius: 4px;
-    }
+    [data-testid="stSidebar"] {{
+        background: {BG1};
+        border-right: 1px solid {BORDER};
+    }}
 
-    /* Sidebar */
-    [data-testid="stSidebar"] {
-        background-color: #0c0c14;
-        border-right: 1px solid #1a1a2a;
-    }
-    [data-testid="stSidebar"] .stMarkdown {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 12px;
-    }
-
-    /* Selectbox, slider, multiselect */
-    .stSelectbox, .stMultiSelect, .stSlider {
-        font-family: 'JetBrains Mono', monospace;
-    }
-
-    /* Status indicators */
-    .status-green { color: #00d4aa; }
-    .status-red { color: #ff6b6b; }
-    .status-yellow { color: #ffe66d; }
-    .status-dim { color: #555; }
-
-    /* Dense table style */
-    .dense-table {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 11px;
-        line-height: 1.4;
-    }
-
-    /* Remove streamlit branding */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+    .stDataFrame {{ border: 1px solid {BORDER}; font-size: 10px; }}
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Data Loading ───────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────
+def f_pct(v, d=1):
+    if v is None or (isinstance(v, float) and np.isnan(v)): return "--"
+    return f"{v*100:.{d}f}%"
+
+def f_num(v, d=2):
+    if v is None or (isinstance(v, float) and np.isnan(v)): return "--"
+    return f"{v:.{d}f}"
+
+def f_jpy(v):
+    if v is None or (isinstance(v, float) and np.isnan(v)): return "--"
+    if abs(v) >= 1e12: return f"Y{v/1e12:.1f}T"
+    if abs(v) >= 1e9: return f"Y{v/1e9:.0f}B"
+    return f"Y{v/1e6:.0f}M"
+
+def f_price(v):
+    if v is None or (isinstance(v, float) and np.isnan(v)): return "--"
+    return f"{v:,.0f}"
+
+def color_val(v, threshold=0, invert=False):
+    if v is None or (isinstance(v, float) and np.isnan(v)): return "dc-dim"
+    if invert: return "dc-red" if v > threshold else "dc-green"
+    return "dc-green" if v > threshold else "dc-red"
+
+def pct_rank(series, val):
+    """Percentile rank of val within series."""
+    if pd.isna(val): return "--"
+    rank = (series.dropna() < val).sum() / max(series.dropna().count(), 1) * 100
+    return f"{rank:.0f}th"
+
+def strip_html(items):
+    """Render a data strip."""
+    parts = []
+    for label, val, css in items:
+        parts.append(f'<div class="strip-item"><span class="strip-label">{label}</span><span class="strip-val {css}">{val}</span></div>')
+    return '<div class="strip">' + ''.join(parts) + '</div>'
+
+def metric_cell(label, val, css=""):
+    return f'<div class="dc"><div class="dc-label">{label}</div><div class="dc-val {css}">{val}</div></div>'
+
+
+# ── Data ───────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_data():
     config = load_universe("config/universe.yaml")
@@ -180,7 +224,7 @@ def load_data():
     df = results_to_dataframe(results)
 
     fund_map = {f["ticker"]: f for f in fundamentals}
-    enrichment_cols = [
+    cols = [
         "pe_trailing", "pe_forward", "pb_ratio", "dividend_yield", "roe", "roa",
         "market_cap", "debt_to_equity", "cash_to_mcap", "ev_to_ebitda",
         "current_price", "fifty_two_week_high", "fifty_two_week_low",
@@ -189,838 +233,732 @@ def load_data():
         "free_cashflow", "total_cash", "total_debt", "enterprise_value",
         "price_to_sales", "current_ratio", "industry",
     ]
-    for col in enrichment_cols:
-        df[col] = df["Ticker"].map(lambda t, c=col: fund_map.get(t, {}).get(c))
+    for c in cols:
+        df[c] = df["Ticker"].map(lambda t, c=c: fund_map.get(t, {}).get(c))
 
-    # Computed columns
     df["mcap_b"] = df["market_cap"].fillna(0) / 1e9
-    df["52w_range_pct"] = np.where(
-        (df["fifty_two_week_high"].notna()) & (df["fifty_two_week_low"].notna()) & (df["fifty_two_week_high"] != df["fifty_two_week_low"]),
-        (df["current_price"] - df["fifty_two_week_low"]) / (df["fifty_two_week_high"] - df["fifty_two_week_low"]),
-        np.nan,
-    )
-    df["sma_cross"] = np.where(
-        (df["fifty_day_avg"].notna()) & (df["two_hundred_day_avg"].notna()) & (df["two_hundred_day_avg"] != 0),
-        df["fifty_day_avg"] / df["two_hundred_day_avg"] - 1,
-        np.nan,
-    )
-    df["fcf_yield"] = np.where(
-        (df["free_cashflow"].notna()) & (df["market_cap"].notna()) & (df["market_cap"] != 0),
-        df["free_cashflow"] / df["market_cap"],
-        np.nan,
-    )
     df["net_cash"] = df["total_cash"].fillna(0) - df["total_debt"].fillna(0)
     df["net_cash_b"] = df["net_cash"] / 1e9
+    df["fcf_yield"] = np.where(
+        (df["free_cashflow"].notna()) & (df["market_cap"].notna()) & (df["market_cap"] != 0),
+        df["free_cashflow"] / df["market_cap"], np.nan)
+    df["52w_pos"] = np.where(
+        (df["fifty_two_week_high"].notna()) & (df["fifty_two_week_low"].notna()) & (df["fifty_two_week_high"] != df["fifty_two_week_low"]),
+        (df["current_price"] - df["fifty_two_week_low"]) / (df["fifty_two_week_high"] - df["fifty_two_week_low"]), np.nan)
+    df["sma_cross"] = np.where(
+        (df["fifty_day_avg"].notna()) & (df["two_hundred_day_avg"].notna()) & (df["two_hundred_day_avg"] != 0),
+        df["fifty_day_avg"] / df["two_hundred_day_avg"] - 1, np.nan)
+    df["ev_to_fcf"] = np.where(
+        (df["enterprise_value"].notna()) & (df["free_cashflow"].notna()) & (df["free_cashflow"] > 0),
+        df["enterprise_value"] / df["free_cashflow"], np.nan)
+    df["net_debt_to_ebitda"] = np.where(
+        (df["ev_to_ebitda"].notna()) & (df["enterprise_value"].notna()) & (df["market_cap"].notna()),
+        (df["total_debt"].fillna(0) - df["total_cash"].fillna(0)) / np.where(df["ev_to_ebitda"] != 0, df["enterprise_value"] / df["ev_to_ebitda"], np.nan),
+        np.nan)
+    # Piotroski-lite: simple quality flag count
+    df["quality_flags"] = (
+        (df["roe"].fillna(0) > 0.08).astype(int) +
+        (df["operating_margin"].fillna(0) > 0.05).astype(int) +
+        (df["revenue_growth"].fillna(0) > 0).astype(int) +
+        (df["earnings_growth"].fillna(0) > 0).astype(int) +
+        (df["current_ratio"].fillna(0) > 1.0).astype(int) +
+        (df["net_cash"] > 0).astype(int) +
+        (df["fcf_yield"].fillna(0) > 0.03).astype(int)
+    )
 
     return df, fundamentals, results
 
-
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_price_data(ticker: str, years: int = 3):
+def load_prices(ticker, years=3):
     return fetch_price_history(ticker, years=years, cache_dir="data/cache")
 
 
-def fmt_pct(v, decimals=1):
-    if v is None or (isinstance(v, float) and np.isnan(v)):
-        return "--"
-    return f"{v * 100:.{decimals}f}%"
-
-def fmt_num(v, decimals=2):
-    if v is None or (isinstance(v, float) and np.isnan(v)):
-        return "--"
-    return f"{v:.{decimals}f}"
-
-def fmt_jpy(v):
-    if v is None or (isinstance(v, float) and np.isnan(v)):
-        return "--"
-    if abs(v) >= 1e12:
-        return f"{v/1e12:.1f}T"
-    if abs(v) >= 1e9:
-        return f"{v/1e9:.1f}B"
-    return f"{v/1e6:.0f}M"
-
-def apply_chart_theme(fig, height=400):
-    fig.update_layout(**CHART_TEMPLATE["layout"], height=height)
-    return fig
-
-
 # ── Load ───────────────────────────────────────────────────────
-with st.spinner("Loading universe..."):
+with st.spinner(""):
     df, fundamentals, results = load_data()
-
 all_sectors = sorted(df["Sector"].dropna().unique().tolist())
 
-# ── Sidebar Controls ───────────────────────────────────────────
-with st.sidebar:
-    st.markdown('<div style="color:#00d4aa; font-size:14px; letter-spacing:2px; font-weight:600;">JVQ TERMINAL</div>', unsafe_allow_html=True)
-    st.markdown('<div style="color:#555; font-size:10px; margin-bottom:16px;">JAPAN VALUE QUANT v1.0</div>', unsafe_allow_html=True)
-    st.markdown("---")
-
-    st.markdown('<div style="color:#555; font-size:10px; letter-spacing:1px; margin-bottom:4px;">SCREENING</div>', unsafe_allow_html=True)
-    min_score = st.slider("Min composite", 0.0, 1.0, 0.40, 0.01, format="%.2f")
-    top_n = st.slider("Display limit", 5, 74, 50)
-
-    sector_filter = st.multiselect("Sectors", options=all_sectors, default=[])
-
-    st.markdown("---")
-    st.markdown('<div style="color:#555; font-size:10px; letter-spacing:1px; margin-bottom:4px;">VALUE FILTERS</div>', unsafe_allow_html=True)
-    max_pe = st.number_input("Max P/E", value=50.0, step=5.0)
-    max_pb = st.number_input("Max P/B", value=5.0, step=0.5)
-    min_div = st.number_input("Min Div Yield %", value=0.0, step=0.5)
-
-    st.markdown("---")
-    st.markdown('<div style="color:#555; font-size:10px; letter-spacing:1px; margin-bottom:4px;">QUALITY FILTERS</div>', unsafe_allow_html=True)
-    min_roe = st.number_input("Min ROE %", value=0.0, step=1.0)
-    max_de = st.number_input("Max D/E", value=500.0, step=50.0)
-
-    st.markdown("---")
-    st.markdown(f'<div style="color:#333; font-size:9px;">Universe: {len(df)} stocks | TOPIX Core</div>', unsafe_allow_html=True)
-
-# ── Apply Filters ──────────────────────────────────────────────
-filtered = df.copy()
-filtered = filtered[filtered["Composite"] >= min_score]
-
-if sector_filter:
-    filtered = filtered[filtered["Sector"].isin(sector_filter)]
-if max_pe < 50:
-    filtered = filtered[(filtered["pe_trailing"].isna()) | (filtered["pe_trailing"] <= max_pe)]
-if max_pb < 5:
-    filtered = filtered[(filtered["pb_ratio"].isna()) | (filtered["pb_ratio"] <= max_pb)]
-if min_div > 0:
-    filtered = filtered[(filtered["dividend_yield"].notna()) & (filtered["dividend_yield"] >= min_div / 100)]
-if min_roe > 0:
-    filtered = filtered[(filtered["roe"].notna()) & (filtered["roe"] >= min_roe / 100)]
-if max_de < 500:
-    filtered = filtered[(filtered["debt_to_equity"].isna()) | (filtered["debt_to_equity"] <= max_de)]
-
-filtered = filtered.head(top_n)
-
-# ── Header ─────────────────────────────────────────────────────
+# ── Top Bar ────────────────────────────────────────────────────
 st.markdown(f"""
-<div class="terminal-header">
-    <span class="title">JVQ TERMINAL</span>
-    <span class="subtitle" style="margin-left:16px;">
-        {len(filtered)}/{len(df)} PASSING | MODEL: japan_deep_value_v1 | REBAL: QUARTERLY | BENCH: NIKKEI 225
-    </span>
+<div class="bb-top">
+    <span class="bb-logo">JVQ</span>
+    <span class="bb-tag">JAPAN VALUE QUANT</span>
+    <span class="bb-tag">|</span>
+    <span class="bb-tag">UNIVERSE {len(df)}</span>
+    <span class="bb-tag">|</span>
+    <span class="bb-tag">MODEL japan_deep_value_v1</span>
+    <span class="bb-tag">|</span>
+    <span class="bb-tag">REBAL Q</span>
+    <span class="bb-tag">|</span>
+    <span class="bb-tag">BENCH ^N225</span>
+    <span style="margin-left:auto;"></span>
+    <span class="bb-live">LIVE</span>
+    <span class="bb-tag">{pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")}</span>
 </div>
 """, unsafe_allow_html=True)
 
+
+# ── Sidebar ────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown(f'<div style="color:{ORANGE}; font-size:12px; letter-spacing:2px; font-weight:600; margin-bottom:12px;">SCREENER</div>', unsafe_allow_html=True)
+
+    preset = st.selectbox("PRESET", ["Custom", "Deep Value", "Quality Value", "High Dividend", "Momentum Value", "Net Cash"])
+    if preset == "Deep Value":
+        min_score, max_pe, max_pb, min_div, min_roe = 0.40, 12.0, 1.2, 0.0, 0.0
+    elif preset == "Quality Value":
+        min_score, max_pe, max_pb, min_div, min_roe = 0.50, 20.0, 3.0, 0.0, 10.0
+    elif preset == "High Dividend":
+        min_score, max_pe, max_pb, min_div, min_roe = 0.35, 30.0, 5.0, 3.0, 0.0
+    elif preset == "Momentum Value":
+        min_score, max_pe, max_pb, min_div, min_roe = 0.45, 25.0, 3.0, 0.0, 0.0
+    elif preset == "Net Cash":
+        min_score, max_pe, max_pb, min_div, min_roe = 0.35, 50.0, 1.5, 0.0, 0.0
+    else:
+        min_score = st.slider("MIN COMPOSITE", 0.0, 1.0, 0.35, 0.01, format="%.2f")
+        max_pe = st.number_input("MAX P/E", value=50.0, step=5.0)
+        max_pb = st.number_input("MAX P/B", value=5.0, step=0.5)
+        min_div = st.number_input("MIN DIV YIELD %", value=0.0, step=0.5)
+        min_roe = st.number_input("MIN ROE %", value=0.0, step=1.0)
+
+    top_n = st.slider("LIMIT", 5, 74, 50)
+    sector_filter = st.multiselect("SECTORS", all_sectors, default=[])
+    max_de = st.number_input("MAX D/E", value=500.0, step=50.0)
+    net_cash_only = st.checkbox("NET CASH POSITIVE ONLY")
+    min_quality_flags = st.slider("MIN QUALITY FLAGS (0-7)", 0, 7, 0)
+
+# ── Filter ─────────────────────────────────────────────────────
+flt = df.copy()
+flt = flt[flt["Composite"] >= min_score]
+if sector_filter:
+    flt = flt[flt["Sector"].isin(sector_filter)]
+if max_pe < 50:
+    flt = flt[(flt["pe_trailing"].isna()) | (flt["pe_trailing"] <= max_pe)]
+if max_pb < 5:
+    flt = flt[(flt["pb_ratio"].isna()) | (flt["pb_ratio"] <= max_pb)]
+if min_div > 0:
+    flt = flt[(flt["dividend_yield"].notna()) & (flt["dividend_yield"] >= min_div / 100)]
+if min_roe > 0:
+    flt = flt[(flt["roe"].notna()) & (flt["roe"] >= min_roe / 100)]
+if max_de < 500:
+    flt = flt[(flt["debt_to_equity"].isna()) | (flt["debt_to_equity"] <= max_de)]
+if net_cash_only:
+    flt = flt[flt["net_cash"] > 0]
+if min_quality_flags > 0:
+    flt = flt[flt["quality_flags"] >= min_quality_flags]
+flt = flt.head(top_n)
+
+
 # ── Summary Strip ──────────────────────────────────────────────
-c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
-c1.metric("UNIVERSE", len(df))
-c2.metric("PASSING", len(filtered))
-c3.metric("TOP SCORE", f"{filtered['Composite'].max():.3f}" if len(filtered) else "--")
-c4.metric("MEDIAN", f"{filtered['Composite'].median():.3f}" if len(filtered) else "--")
-c5.metric("AVG P/B", fmt_num(filtered["pb_ratio"].median()))
-c6.metric("AVG P/E", fmt_num(filtered["pe_trailing"].median()))
-c7.metric("AVG DIV", fmt_pct(filtered["dividend_yield"].median()))
-c8.metric("SECTORS", filtered["Sector"].nunique() if len(filtered) else 0)
+st.markdown(strip_html([
+    ("PASSING", f"{len(flt)}/{len(df)}", "dc-orange"),
+    ("TOP", f"{flt['Composite'].max():.3f}" if len(flt) else "--", "dc-orange"),
+    ("MED COMP", f"{flt['Composite'].median():.3f}" if len(flt) else "--", ""),
+    ("MED P/B", f_num(flt["pb_ratio"].median()), ""),
+    ("MED P/E", f_num(flt["pe_trailing"].median()), ""),
+    ("MED DIV", f_pct(flt["dividend_yield"].median()), ""),
+    ("MED ROE", f_pct(flt["roe"].median()), ""),
+    ("TOT MCAP", f_jpy(flt["market_cap"].sum()), ""),
+    ("SECTORS", str(flt["Sector"].nunique()) if len(flt) else "0", ""),
+    ("AVG BETA", f_num(flt["beta"].median()), ""),
+    ("AVG QLTY", f_num(flt["quality_flags"].median(), 0), ""),
+]), unsafe_allow_html=True)
 
 
 # ── Tabs ───────────────────────────────────────────────────────
-tab_screen, tab_index, tab_sector, tab_stock, tab_factors, tab_risk, tab_compare = st.tabs([
-    "SCREENER", "INDEX", "SECTORS", "STOCK", "FACTORS", "RISK", "COMPARE",
+t_scr, t_idx, t_sec, t_stk, t_val, t_qual, t_risk, t_tech, t_comp = st.tabs([
+    "SCREEN", "INDEX", "SECTOR", "EQUITY", "VALUATION", "QUALITY", "RISK", "TECHNICALS", "COMPARE",
 ])
 
 
 # ════════════════════════════════════════════════════════════════
-# TAB: SCREENER
+# SCREEN
 # ════════════════════════════════════════════════════════════════
-with tab_screen:
-    st.markdown("### SCREENING RESULTS")
+with t_scr:
+    # Main table
+    tcols = ["Ticker", "Name", "Sector", "Composite", "Value", "Quality", "Strength", "Momentum",
+             "pe_trailing", "pb_ratio", "ev_to_ebitda", "dividend_yield", "roe",
+             "debt_to_equity", "cash_to_mcap", "fcf_yield", "beta", "mcap_b", "quality_flags"]
+    tdf = flt[tcols].copy()
+    tdf.columns = ["TICKER", "NAME", "SECTOR", "COMP", "VAL", "QUAL", "STR", "MOM",
+                    "P/E", "P/B", "EV/EBITDA", "DIV%", "ROE%", "D/E", "CASH/MC", "FCF_Y", "BETA", "MCAP_B", "QF"]
+    for c in ["DIV%", "ROE%", "CASH/MC", "FCF_Y"]:
+        tdf[c] = tdf[c].apply(lambda x: f"{x*100:.1f}" if pd.notna(x) else "--")
+    tdf["MCAP_B"] = tdf["MCAP_B"].apply(lambda x: f"{x:.0f}" if pd.notna(x) else "--")
+    st.dataframe(tdf, use_container_width=True, height=700)
 
-    # Composite score distribution
-    fig_dist = go.Figure()
-    fig_dist.add_trace(go.Histogram(
-        x=df["Composite"], nbinsx=30,
-        marker_color="#1a1a2a", marker_line_color="#00d4aa", marker_line_width=1,
-        name="All",
-    ))
-    if len(filtered) > 0:
-        fig_dist.add_trace(go.Histogram(
-            x=filtered["Composite"], nbinsx=30,
-            marker_color="rgba(0,212,170,0.4)", marker_line_color="#00d4aa", marker_line_width=1,
-            name="Passing",
-        ))
-    fig_dist.update_layout(barmode="overlay", xaxis_title="Composite Score", yaxis_title="Count")
-    apply_chart_theme(fig_dist, 250)
-    fig_dist.update_layout(title="SCORE DISTRIBUTION", legend=dict(orientation="h", y=1.1))
-    st.plotly_chart(fig_dist, use_container_width=True)
+    # Distribution + stacked bars side by side
+    dl, dr = st.columns(2)
+    with dl:
+        fig = go.Figure()
+        fig.add_trace(go.Histogram(x=df["Composite"], nbinsx=30, marker_color=GRAY_DIM, marker_line_color=BORDER, name="ALL"))
+        fig.add_trace(go.Histogram(x=flt["Composite"], nbinsx=30, marker_color=ORANGE_DIM, marker_line_color=ORANGE, name="PASS"))
+        fig.update_layout(**chart_layout(250, barmode="overlay", showlegend=True), title="COMPOSITE DISTRIBUTION")
+        fig.update_layout(legend=dict(orientation="h", y=1.12))
+        st.plotly_chart(fig, use_container_width=True)
 
-    # Main data table
-    display_cols = [
-        "Ticker", "Name", "Sector", "Composite", "Value", "Quality", "Strength", "Momentum",
-        "pe_trailing", "pb_ratio", "dividend_yield", "roe", "mcap_b", "beta",
-    ]
-    display_df = filtered[display_cols].copy()
-    display_df.columns = [
-        "TICKER", "NAME", "SECTOR", "COMP", "VAL", "QUAL", "STR", "MOM",
-        "P/E", "P/B", "DIV%", "ROE%", "MCAP(B)", "BETA",
-    ]
-    display_df["DIV%"] = display_df["DIV%"].apply(lambda x: f"{x*100:.1f}" if pd.notna(x) else "--")
-    display_df["ROE%"] = display_df["ROE%"].apply(lambda x: f"{x*100:.1f}" if pd.notna(x) else "--")
-    display_df["MCAP(B)"] = display_df["MCAP(B)"].apply(lambda x: f"{x:.0f}" if pd.notna(x) else "--")
-
-    st.dataframe(display_df, use_container_width=True, height=600)
-
-    # Stacked score breakdown
-    fig_stack = go.Figure()
-    for col, color in [("Value", "#00d4aa"), ("Quality", "#4ecdc4"), ("Strength", "#a855f7"), ("Momentum", "#ffe66d")]:
-        fig_stack.add_trace(go.Bar(
-            x=filtered["Ticker"], y=filtered[col], name=col.upper(),
-            marker_color=color, marker_line_width=0,
-        ))
-    fig_stack.update_layout(barmode="stack", xaxis_title="", yaxis_title="SCORE")
-    apply_chart_theme(fig_stack, 350)
-    fig_stack.update_layout(title="FACTOR DECOMPOSITION", legend=dict(orientation="h", y=1.1),
-                            xaxis=dict(tickangle=-45, tickfont=dict(size=9)))
-    st.plotly_chart(fig_stack, use_container_width=True)
+    with dr:
+        fig = go.Figure()
+        for col, clr in [("Value", ORANGE), ("Quality", GREEN), ("Strength", YELLOW), ("Momentum", "#06b6d4")]:
+            fig.add_trace(go.Bar(x=flt["Ticker"].head(20), y=flt[col].head(20), name=col.upper()[:3], marker_color=clr, marker_line_width=0))
+        fig.update_layout(**chart_layout(250, barmode="stack", showlegend=True), title="SCORE DECOMPOSITION (TOP 20)")
+        fig.update_layout(legend=dict(orientation="h", y=1.12), xaxis=dict(tickangle=-45, tickfont=dict(size=8)))
+        st.plotly_chart(fig, use_container_width=True)
 
 
 # ════════════════════════════════════════════════════════════════
-# TAB: INDEX
+# INDEX
 # ════════════════════════════════════════════════════════════════
-with tab_index:
-    st.markdown("### UNIVERSE OVERVIEW")
+with t_idx:
+    il, ir = st.columns([1.3, 0.7])
 
-    idx_c1, idx_c2 = st.columns(2)
-
-    with idx_c1:
-        # Market cap distribution
-        fig_mcap = go.Figure()
-        fig_mcap.add_trace(go.Bar(
-            x=df.sort_values("mcap_b", ascending=False)["Ticker"],
-            y=df.sort_values("mcap_b", ascending=False)["mcap_b"],
-            marker_color=np.where(
-                df.sort_values("mcap_b", ascending=False)["Ticker"].isin(filtered["Ticker"]),
-                "#00d4aa", "#1a1a2a"
-            ),
-            marker_line_width=0,
-        ))
-        fig_mcap.update_layout(xaxis_title="", yaxis_title="MARKET CAP (JPY B)",
-                               xaxis=dict(tickangle=-45, tickfont=dict(size=8)))
-        apply_chart_theme(fig_mcap, 350)
-        fig_mcap.update_layout(title="MARKET CAP DISTRIBUTION")
-        st.plotly_chart(fig_mcap, use_container_width=True)
-
-    with idx_c2:
-        # Sector breakdown
-        sector_agg = df.groupby("Sector").agg(
-            count=("Ticker", "size"),
-            avg_composite=("Composite", "mean"),
-            total_mcap=("mcap_b", "sum"),
-            avg_pb=("pb_ratio", "mean"),
-            avg_pe=("pe_trailing", "mean"),
-            avg_div=("dividend_yield", "mean"),
-        ).reset_index().sort_values("total_mcap", ascending=True)
-
-        fig_sector_bar = go.Figure()
-        fig_sector_bar.add_trace(go.Barh(
-            y=sector_agg["Sector"],
-            x=sector_agg["total_mcap"],
-            marker_color="#00d4aa",
-            marker_line_width=0,
-            text=sector_agg["count"].apply(lambda x: f"n={x}"),
-            textposition="auto",
-            textfont=dict(size=9),
-        ))
-        fig_sector_bar.update_layout(xaxis_title="TOTAL MCAP (JPY B)", yaxis_title="")
-        apply_chart_theme(fig_sector_bar, 350)
-        fig_sector_bar.update_layout(title="SECTOR MARKET CAP")
-        st.plotly_chart(fig_sector_bar, use_container_width=True)
-
-    # Full universe stats
-    st.markdown("### UNIVERSE STATISTICS")
-    stats_data = {
-        "Metric": ["Composite", "P/E", "P/B", "EV/EBITDA", "Div Yield %", "ROE %",
-                    "D/E", "Beta", "MCap (B JPY)", "Cash/MCap %", "FCF Yield %"],
-        "Mean": [
-            fmt_num(df["Composite"].mean(), 3),
-            fmt_num(df["pe_trailing"].mean()),
-            fmt_num(df["pb_ratio"].mean()),
-            fmt_num(df["ev_to_ebitda"].mean()),
-            fmt_pct(df["dividend_yield"].mean()),
-            fmt_pct(df["roe"].mean()),
-            fmt_num(df["debt_to_equity"].mean(), 0),
-            fmt_num(df["beta"].mean()),
-            fmt_num(df["mcap_b"].mean(), 0),
-            fmt_pct(df["cash_to_mcap"].mean()),
-            fmt_pct(df["fcf_yield"].mean()),
-        ],
-        "Median": [
-            fmt_num(df["Composite"].median(), 3),
-            fmt_num(df["pe_trailing"].median()),
-            fmt_num(df["pb_ratio"].median()),
-            fmt_num(df["ev_to_ebitda"].median()),
-            fmt_pct(df["dividend_yield"].median()),
-            fmt_pct(df["roe"].median()),
-            fmt_num(df["debt_to_equity"].median(), 0),
-            fmt_num(df["beta"].median()),
-            fmt_num(df["mcap_b"].median(), 0),
-            fmt_pct(df["cash_to_mcap"].median()),
-            fmt_pct(df["fcf_yield"].median()),
-        ],
-        "Min": [
-            fmt_num(df["Composite"].min(), 3),
-            fmt_num(df["pe_trailing"].min()),
-            fmt_num(df["pb_ratio"].min()),
-            fmt_num(df["ev_to_ebitda"].min()),
-            fmt_pct(df["dividend_yield"].min()),
-            fmt_pct(df["roe"].min()),
-            fmt_num(df["debt_to_equity"].min(), 0),
-            fmt_num(df["beta"].min()),
-            fmt_num(df["mcap_b"].min(), 0),
-            fmt_pct(df["cash_to_mcap"].min()),
-            fmt_pct(df["fcf_yield"].min()),
-        ],
-        "Max": [
-            fmt_num(df["Composite"].max(), 3),
-            fmt_num(df["pe_trailing"].max()),
-            fmt_num(df["pb_ratio"].max()),
-            fmt_num(df["ev_to_ebitda"].max()),
-            fmt_pct(df["dividend_yield"].max()),
-            fmt_pct(df["roe"].max()),
-            fmt_num(df["debt_to_equity"].max(), 0),
-            fmt_num(df["beta"].max()),
-            fmt_num(df["mcap_b"].max(), 0),
-            fmt_pct(df["cash_to_mcap"].max()),
-            fmt_pct(df["fcf_yield"].max()),
-        ],
-    }
-    st.dataframe(pd.DataFrame(stats_data), use_container_width=True, height=420)
-
-    # P/B vs P/E scatter for entire universe
-    fig_pbpe = go.Figure()
-    for sector in all_sectors:
-        sdf = df[df["Sector"] == sector]
-        fig_pbpe.add_trace(go.Scatter(
-            x=sdf["pe_trailing"], y=sdf["pb_ratio"],
-            mode="markers+text",
-            text=sdf["Ticker"],
-            textposition="top center",
-            textfont=dict(size=8),
-            name=sector,
-            marker=dict(size=8, line=dict(width=0.5, color="#0a0a0f")),
-        ))
-    fig_pbpe.update_layout(xaxis_title="P/E TRAILING", yaxis_title="P/B RATIO")
-    apply_chart_theme(fig_pbpe, 500)
-    fig_pbpe.update_layout(title="VALUATION MAP: P/E vs P/B", legend=dict(font=dict(size=9)))
-    st.plotly_chart(fig_pbpe, use_container_width=True)
-
-
-# ════════════════════════════════════════════════════════════════
-# TAB: SECTORS
-# ════════════════════════════════════════════════════════════════
-with tab_sector:
-    st.markdown("### SECTOR ANALYSIS")
-
-    selected_sector = st.selectbox("Select sector", ["ALL"] + all_sectors)
-    sector_df = filtered if selected_sector == "ALL" else filtered[filtered["Sector"] == selected_sector]
-
-    if len(sector_df) == 0:
-        st.warning("No stocks match current filters for this sector.")
-    else:
-        sc1, sc2, sc3, sc4, sc5, sc6 = st.columns(6)
-        sc1.metric("STOCKS", len(sector_df))
-        sc2.metric("AVG COMP", fmt_num(sector_df["Composite"].mean(), 3))
-        sc3.metric("MED P/B", fmt_num(sector_df["pb_ratio"].median()))
-        sc4.metric("MED P/E", fmt_num(sector_df["pe_trailing"].median()))
-        sc5.metric("MED DIV", fmt_pct(sector_df["dividend_yield"].median()))
-        sc6.metric("MED ROE", fmt_pct(sector_df["roe"].median()))
-
-        sec_l, sec_r = st.columns(2)
-
-        with sec_l:
-            # Score comparison within sector
-            fig_sec_score = go.Figure()
-            for col, color in [("Value", "#00d4aa"), ("Quality", "#4ecdc4"), ("Strength", "#a855f7"), ("Momentum", "#ffe66d")]:
-                fig_sec_score.add_trace(go.Bar(
-                    x=sector_df["Ticker"], y=sector_df[col], name=col.upper(),
-                    marker_color=color, marker_line_width=0,
-                ))
-            fig_sec_score.update_layout(barmode="group", xaxis_title="", yaxis_title="SCORE",
-                                         xaxis=dict(tickangle=-45, tickfont=dict(size=9)))
-            apply_chart_theme(fig_sec_score, 400)
-            fig_sec_score.update_layout(title=f"FACTOR SCORES: {selected_sector}", legend=dict(orientation="h", y=1.1))
-            st.plotly_chart(fig_sec_score, use_container_width=True)
-
-        with sec_r:
-            # Valuation scatter
-            fig_sec_val = go.Figure()
-            fig_sec_val.add_trace(go.Scatter(
-                x=sector_df["pb_ratio"], y=sector_df["dividend_yield"].fillna(0) * 100,
-                mode="markers+text",
-                text=sector_df["Ticker"],
-                textposition="top center",
-                textfont=dict(size=9),
-                marker=dict(
-                    size=sector_df["mcap_b"].clip(1, None).apply(np.log) * 5,
-                    color=sector_df["Composite"],
-                    colorscale=[[0, "#1a1a2a"], [0.5, "#4ecdc4"], [1, "#00d4aa"]],
-                    showscale=True,
-                    colorbar=dict(title="COMP", titlefont=dict(size=9)),
-                    line=dict(width=0.5, color="#0a0a0f"),
-                ),
+    with il:
+        # Valuation map
+        fig = go.Figure()
+        for sec in all_sectors:
+            s = df[df["Sector"] == sec]
+            fig.add_trace(go.Scatter(
+                x=s["pe_trailing"], y=s["pb_ratio"], mode="markers",
+                name=sec, marker=dict(size=7, line=dict(width=0.3, color=BG)),
+                text=s["Ticker"], hovertemplate="%{text}<br>P/E: %{x:.1f}<br>P/B: %{y:.2f}",
             ))
-            fig_sec_val.update_layout(xaxis_title="P/B", yaxis_title="DIV YIELD %")
-            apply_chart_theme(fig_sec_val, 400)
-            fig_sec_val.update_layout(title=f"VALUATION: {selected_sector}")
-            st.plotly_chart(fig_sec_val, use_container_width=True)
+        fig.add_hline(y=1.0, line_dash="dot", line_color=GRAY_DIM, line_width=1)
+        fig.add_vline(x=15.0, line_dash="dot", line_color=GRAY_DIM, line_width=1)
+        fig.update_layout(**chart_layout(450, showlegend=True), title="VALUATION MAP",
+                          xaxis_title="P/E", yaxis_title="P/B",
+                          legend=dict(font=dict(size=8), orientation="v", x=1.02))
+        st.plotly_chart(fig, use_container_width=True)
 
-        # Detailed sector table
-        sec_display = sector_df[["Ticker", "Name", "Composite", "Value", "Quality", "Strength", "Momentum",
-                                  "pe_trailing", "pb_ratio", "dividend_yield", "roe", "ev_to_ebitda",
-                                  "debt_to_equity", "cash_to_mcap", "mcap_b", "beta"]].copy()
-        sec_display.columns = ["TICKER", "NAME", "COMP", "VAL", "QUAL", "STR", "MOM",
-                               "P/E", "P/B", "DIV%", "ROE%", "EV/EBITDA", "D/E", "CASH/MC%", "MCAP(B)", "BETA"]
-        sec_display["DIV%"] = sec_display["DIV%"].apply(lambda x: f"{x*100:.1f}" if pd.notna(x) else "--")
-        sec_display["ROE%"] = sec_display["ROE%"].apply(lambda x: f"{x*100:.1f}" if pd.notna(x) else "--")
-        sec_display["CASH/MC%"] = sec_display["CASH/MC%"].apply(lambda x: f"{x*100:.1f}" if pd.notna(x) else "--")
-        st.dataframe(sec_display, use_container_width=True, height=400)
+    with ir:
+        # Universe stats
+        stats = []
+        for metric, col, fmt, dec in [
+            ("Composite", "Composite", "n", 3), ("P/E", "pe_trailing", "n", 1),
+            ("P/B", "pb_ratio", "n", 2), ("EV/EBITDA", "ev_to_ebitda", "n", 1),
+            ("Div Yield", "dividend_yield", "p", 1), ("ROE", "roe", "p", 1),
+            ("Op Margin", "operating_margin", "p", 1), ("FCF Yield", "fcf_yield", "p", 1),
+            ("D/E", "debt_to_equity", "n", 0), ("Beta", "beta", "n", 2),
+            ("MCap (B)", "mcap_b", "n", 0), ("Cash/MCap", "cash_to_mcap", "p", 1),
+        ]:
+            s = df[col].dropna()
+            fn = f_pct if fmt == "p" else lambda v, d=dec: f_num(v, d)
+            stats.append({
+                "": metric,
+                "MEAN": fn(s.mean()),
+                "MED": fn(s.median()),
+                "P10": fn(s.quantile(0.1)),
+                "P90": fn(s.quantile(0.9)),
+            })
+        st.dataframe(pd.DataFrame(stats), use_container_width=True, hide_index=True, height=450)
+
+    # Sector table
+    sec_agg = df.groupby("Sector").agg(
+        N=("Ticker", "size"),
+        Comp=("Composite", "mean"),
+        PB=("pb_ratio", "median"),
+        PE=("pe_trailing", "median"),
+        Div=("dividend_yield", "median"),
+        ROE=("roe", "median"),
+        MCap=("mcap_b", "sum"),
+        Beta=("beta", "median"),
+        QF=("quality_flags", "median"),
+    ).reset_index().sort_values("MCap", ascending=False)
+    sec_agg["Div"] = sec_agg["Div"].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) else "--")
+    sec_agg["ROE"] = sec_agg["ROE"].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) else "--")
+    sec_agg["MCap"] = sec_agg["MCap"].apply(lambda x: f"{x:,.0f}")
+    sec_agg.columns = ["SECTOR", "N", "AVG COMP", "MED P/B", "MED P/E", "MED DIV", "MED ROE", "TOT MCAP(B)", "MED BETA", "MED QF"]
+    st.dataframe(sec_agg, use_container_width=True, hide_index=True)
 
 
 # ════════════════════════════════════════════════════════════════
-# TAB: STOCK
+# SECTOR
 # ════════════════════════════════════════════════════════════════
-with tab_stock:
-    st.markdown("### STOCK ANALYSIS")
+with t_sec:
+    sel_sec = st.selectbox("SECTOR", ["ALL"] + all_sectors, key="sec_sel")
+    sdf = flt if sel_sec == "ALL" else flt[flt["Sector"] == sel_sec]
 
-    stock_list = filtered["Ticker"].tolist()
-    if stock_list:
-        selected_stock = st.selectbox(
-            "Select stock",
-            stock_list,
-            format_func=lambda t: f"{t}  {filtered[filtered['Ticker']==t]['Name'].values[0]}",
-        )
+    if len(sdf) == 0:
+        st.warning("No stocks match.")
     else:
-        selected_stock = None
-        st.warning("No stocks match current filters.")
+        st.markdown(strip_html([
+            ("N", str(len(sdf)), "dc-orange"),
+            ("AVG COMP", f_num(sdf["Composite"].mean(), 3), ""),
+            ("MED P/B", f_num(sdf["pb_ratio"].median()), ""),
+            ("MED P/E", f_num(sdf["pe_trailing"].median()), ""),
+            ("MED DIV", f_pct(sdf["dividend_yield"].median()), ""),
+            ("MED ROE", f_pct(sdf["roe"].median()), ""),
+            ("TOT MCAP", f_jpy(sdf["market_cap"].sum()), ""),
+        ]), unsafe_allow_html=True)
 
-    if selected_stock:
-        row = filtered[filtered["Ticker"] == selected_stock].iloc[0]
+        sl, sr = st.columns(2)
+        with sl:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=sdf["Ticker"], y=sdf["Composite"], marker_color=ORANGE, marker_line_width=0))
+            fig.update_layout(**chart_layout(300), title=f"COMPOSITE: {sel_sec}",
+                              xaxis=dict(tickangle=-45, tickfont=dict(size=8)))
+            st.plotly_chart(fig, use_container_width=True)
 
-        # Header
+        with sr:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=sdf["pb_ratio"], y=sdf["dividend_yield"].fillna(0) * 100,
+                mode="markers+text", text=sdf["Ticker"], textposition="top center",
+                textfont=dict(size=8, color=GRAY),
+                marker=dict(size=np.clip(sdf["mcap_b"].fillna(1).apply(np.log) * 4, 4, 25),
+                            color=ORANGE, line=dict(width=0.5, color=BG)),
+            ))
+            fig.update_layout(**chart_layout(300), title=f"P/B vs DIV YIELD: {sel_sec}",
+                              xaxis_title="P/B", yaxis_title="DIV %")
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Sector detail table
+        stbl = sdf[["Ticker", "Name", "Composite", "Value", "Quality", "Strength", "Momentum",
+                     "pe_trailing", "pb_ratio", "dividend_yield", "roe", "ev_to_ebitda",
+                     "debt_to_equity", "cash_to_mcap", "fcf_yield", "beta", "mcap_b", "quality_flags"]].copy()
+        stbl.columns = ["TICKER", "NAME", "COMP", "VAL", "QUAL", "STR", "MOM",
+                        "P/E", "P/B", "DIV%", "ROE%", "EV/EB", "D/E", "CASH/MC", "FCF_Y", "BETA", "MCAP_B", "QF"]
+        for c in ["DIV%", "ROE%", "CASH/MC", "FCF_Y"]:
+            stbl[c] = stbl[c].apply(lambda x: f"{x*100:.1f}" if pd.notna(x) else "--")
+        st.dataframe(stbl, use_container_width=True, height=400)
+
+
+# ════════════════════════════════════════════════════════════════
+# EQUITY (single stock deep dive)
+# ════════════════════════════════════════════════════════════════
+with t_stk:
+    stk_list = flt["Ticker"].tolist()
+    if not stk_list:
+        st.warning("No stocks match.")
+    else:
+        sel_stk = st.selectbox("EQUITY", stk_list,
+                               format_func=lambda t: f"{t}  {flt[flt['Ticker']==t]['Name'].values[0]}",
+                               key="stk_sel")
+        r = flt[flt["Ticker"] == sel_stk].iloc[0]
+
+        # Header strip
         st.markdown(f"""
-        <div style="display:flex; align-items:baseline; gap:16px; margin-bottom:12px;">
-            <span style="color:#00d4aa; font-size:20px; font-weight:600; font-family:monospace;">{selected_stock}</span>
-            <span style="color:#c8c8c8; font-size:14px;">{row['Name']}</span>
-            <span style="color:#555; font-size:11px;">{row['Sector']} / {row.get('industry', '--')}</span>
+        <div class="bb-top" style="margin:0 -1rem; padding:6px 12px;">
+            <span style="color:{ORANGE}; font-size:16px; font-weight:600;">{sel_stk}</span>
+            <span style="color:{WHITE}; font-size:13px;">{r['Name']}</span>
+            <span style="color:{GRAY}; font-size:10px;">{r['Sector']} / {r.get('industry') or '--'}</span>
+            <span style="margin-left:auto;"></span>
+            <span style="color:{WHITE}; font-size:16px; font-weight:600;">{f_price(r.get('current_price'))}</span>
+            <span style="color:{GRAY}; font-size:10px;">JPY</span>
         </div>
         """, unsafe_allow_html=True)
 
-        # Key metrics strip
-        km1, km2, km3, km4, km5, km6, km7, km8 = st.columns(8)
-        km1.metric("COMPOSITE", fmt_num(row["Composite"], 3))
-        km2.metric("PRICE", f"{row['current_price']:,.0f}" if pd.notna(row.get("current_price")) else "--")
-        km3.metric("MCAP", fmt_jpy(row.get("market_cap")))
-        km4.metric("P/E", fmt_num(row.get("pe_trailing")))
-        km5.metric("P/B", fmt_num(row.get("pb_ratio")))
-        km6.metric("DIV", fmt_pct(row.get("dividend_yield")))
-        km7.metric("ROE", fmt_pct(row.get("roe")))
-        km8.metric("BETA", fmt_num(row.get("beta")))
+        # Score strip
+        st.markdown(strip_html([
+            ("COMPOSITE", f_num(r["Composite"], 3), "dc-orange"),
+            ("VALUE", f_num(r["Value"], 3), ""),
+            ("QUALITY", f_num(r["Quality"], 3), ""),
+            ("STRENGTH", f_num(r["Strength"], 3), ""),
+            ("MOMENTUM", f_num(r["Momentum"], 3), ""),
+            ("QUALITY FLAGS", f_num(r["quality_flags"], 0), "dc-orange" if r["quality_flags"] >= 5 else ""),
+            ("RANK", f"#{flt.index.get_loc(r.name)+1}/{len(flt)}", "dc-orange"),
+        ]), unsafe_allow_html=True)
 
-        stk_l, stk_r = st.columns([1.2, 0.8])
+        eq_l, eq_r = st.columns([1.4, 0.6])
 
-        with stk_l:
+        with eq_l:
             # Price chart
-            prices = load_price_data(selected_stock, years=3)
+            prices = load_prices(sel_stk, years=3)
             if not prices.empty:
-                fig_price = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                                          row_heights=[0.75, 0.25], vertical_spacing=0.03)
+                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.78, 0.22], vertical_spacing=0.02)
 
-                close_col = "Close"
                 if isinstance(prices.columns, pd.MultiIndex):
-                    close_col = ("Close", selected_stock) if ("Close", selected_stock) in prices.columns else prices.columns[0]
+                    close = prices[("Close", sel_stk)] if ("Close", sel_stk) in prices.columns else prices.iloc[:, 0]
+                    vol_col = ("Volume", sel_stk) if ("Volume", sel_stk) in prices.columns else None
+                else:
+                    close = prices["Close"] if "Close" in prices.columns else prices.iloc[:, 0]
+                    vol_col = "Volume" if "Volume" in prices.columns else None
 
-                close = prices[close_col] if close_col in prices.columns else prices.iloc[:, 0]
                 sma50 = close.rolling(50).mean()
                 sma200 = close.rolling(200).mean()
 
-                fig_price.add_trace(go.Scatter(
-                    x=prices.index, y=close, mode="lines",
-                    line=dict(color="#c8c8c8", width=1), name="CLOSE",
-                ), row=1, col=1)
-                fig_price.add_trace(go.Scatter(
-                    x=prices.index, y=sma50, mode="lines",
-                    line=dict(color="#00d4aa", width=1, dash="dot"), name="SMA50",
-                ), row=1, col=1)
-                fig_price.add_trace(go.Scatter(
-                    x=prices.index, y=sma200, mode="lines",
-                    line=dict(color="#a855f7", width=1, dash="dot"), name="SMA200",
-                ), row=1, col=1)
+                fig.add_trace(go.Scatter(x=prices.index, y=close, mode="lines",
+                    line=dict(color=WHITE, width=1), name="CLOSE"), row=1, col=1)
+                fig.add_trace(go.Scatter(x=prices.index, y=sma50, mode="lines",
+                    line=dict(color=ORANGE, width=1, dash="dot"), name="SMA50"), row=1, col=1)
+                fig.add_trace(go.Scatter(x=prices.index, y=sma200, mode="lines",
+                    line=dict(color=GREEN, width=1, dash="dot"), name="SMA200"), row=1, col=1)
 
-                vol_col = "Volume"
-                if isinstance(prices.columns, pd.MultiIndex):
-                    vol_col = ("Volume", selected_stock) if ("Volume", selected_stock) in prices.columns else None
                 if vol_col and vol_col in prices.columns:
-                    fig_price.add_trace(go.Bar(
-                        x=prices.index, y=prices[vol_col],
-                        marker_color="rgba(0,212,170,0.3)", marker_line_width=0, name="VOL",
-                    ), row=2, col=1)
+                    fig.add_trace(go.Bar(x=prices.index, y=prices[vol_col],
+                        marker_color=GRAY_DIM, marker_line_width=0, name="VOL"), row=2, col=1)
 
-                apply_chart_theme(fig_price, 420)
-                fig_price.update_layout(title=f"{selected_stock} PRICE (3Y)",
-                                        legend=dict(orientation="h", y=1.08),
-                                        showlegend=True)
-                fig_price.update_yaxes(title_text="JPY", row=1, col=1)
-                fig_price.update_yaxes(title_text="VOL", row=2, col=1)
-                st.plotly_chart(fig_price, use_container_width=True)
+                fig.update_layout(**chart_layout(380, showlegend=True), title=f"{sel_stk} 3Y")
+                fig.update_layout(legend=dict(orientation="h", y=1.06))
+                fig.update_yaxes(title_text="JPY", row=1, col=1, gridcolor=BORDER)
+                fig.update_yaxes(title_text="VOL", row=2, col=1, gridcolor=BORDER)
+                fig.update_xaxes(gridcolor=BORDER)
+                st.plotly_chart(fig, use_container_width=True)
 
-        with stk_r:
-            # Factor radar
-            categories = ["Value", "Quality", "Strength", "Momentum"]
-            values = [row[c] for c in categories]
-            values.append(values[0])
-
-            fig_radar = go.Figure()
-            fig_radar.add_trace(go.Scatterpolar(
-                r=values,
-                theta=["VAL", "QUAL", "STR", "MOM", "VAL"],
-                fill="toself",
-                fillcolor="rgba(0,212,170,0.15)",
-                line_color="#00d4aa",
-                line_width=2,
-            ))
-            fig_radar.update_layout(
-                polar=dict(
-                    radialaxis=dict(visible=True, range=[0, 1], tickfont=dict(size=8), gridcolor="#1a1a2a"),
-                    angularaxis=dict(tickfont=dict(size=10, color="#c8c8c8"), gridcolor="#1a1a2a"),
-                    bgcolor="#0a0a0f",
-                ),
-            )
-            apply_chart_theme(fig_radar, 300)
-            fig_radar.update_layout(title="FACTOR PROFILE", showlegend=False)
-            st.plotly_chart(fig_radar, use_container_width=True)
-
-        # Full fundamentals table
-        st.markdown("### FUNDAMENTALS")
-        fund_l, fund_r = st.columns(2)
-
-        with fund_l:
-            val_data = {
-                "Metric": ["P/E Trailing", "P/E Forward", "P/B", "P/S", "EV/EBITDA",
-                           "FCF Yield", "Div Yield", "Cash/MCap"],
-                "Value": [
-                    fmt_num(row.get("pe_trailing")),
-                    fmt_num(row.get("pe_forward")),
-                    fmt_num(row.get("pb_ratio")),
-                    fmt_num(row.get("price_to_sales")),
-                    fmt_num(row.get("ev_to_ebitda")),
-                    fmt_pct(row.get("fcf_yield")),
-                    fmt_pct(row.get("dividend_yield")),
-                    fmt_pct(row.get("cash_to_mcap")),
-                ],
-            }
-            st.markdown("**VALUATION**")
-            st.dataframe(pd.DataFrame(val_data), use_container_width=True, hide_index=True, height=320)
-
-        with fund_r:
-            qual_data = {
-                "Metric": ["ROE", "ROA", "Operating Margin", "Profit Margin",
-                           "Revenue Growth", "Earnings Growth", "D/E", "Current Ratio"],
-                "Value": [
-                    fmt_pct(row.get("roe")),
-                    fmt_pct(row.get("roa")),
-                    fmt_pct(row.get("operating_margin")),
-                    fmt_pct(row.get("profit_margin")),
-                    fmt_pct(row.get("revenue_growth")),
-                    fmt_pct(row.get("earnings_growth")),
-                    fmt_num(row.get("debt_to_equity"), 0),
-                    fmt_num(row.get("current_ratio")),
-                ],
-            }
-            st.markdown("**QUALITY / BALANCE SHEET**")
-            st.dataframe(pd.DataFrame(qual_data), use_container_width=True, hide_index=True, height=320)
-
-        # 52-week range visual
-        if pd.notna(row.get("fifty_two_week_low")) and pd.notna(row.get("fifty_two_week_high")):
-            low = row["fifty_two_week_low"]
-            high = row["fifty_two_week_high"]
-            price = row.get("current_price", low)
-
-            fig_range = go.Figure()
-            fig_range.add_trace(go.Scatter(
-                x=[low, high], y=[0, 0], mode="lines",
-                line=dict(color="#1a1a2a", width=8),
-            ))
-            fig_range.add_trace(go.Scatter(
-                x=[price], y=[0], mode="markers",
-                marker=dict(color="#00d4aa", size=14, symbol="diamond"),
-                name=f"Current: {price:,.0f}",
-            ))
-            fig_range.add_annotation(x=low, y=0.1, text=f"52W LOW: {low:,.0f}", showarrow=False, font=dict(size=9, color="#ff6b6b"))
-            fig_range.add_annotation(x=high, y=0.1, text=f"52W HIGH: {high:,.0f}", showarrow=False, font=dict(size=9, color="#00d4aa"))
-            fig_range.update_yaxes(visible=False, range=[-0.5, 0.5])
-            apply_chart_theme(fig_range, 100)
-            fig_range.update_layout(title="52-WEEK RANGE", showlegend=True, margin=dict(t=30, b=10))
-            st.plotly_chart(fig_range, use_container_width=True)
-
-
-# ════════════════════════════════════════════════════════════════
-# TAB: FACTORS
-# ════════════════════════════════════════════════════════════════
-with tab_factors:
-    st.markdown("### FACTOR ANALYSIS")
-
-    fac_l, fac_r = st.columns(2)
-
-    with fac_l:
-        # Value vs Quality scatter
-        fig_vq = go.Figure()
-        fig_vq.add_trace(go.Scatter(
-            x=filtered["Value"], y=filtered["Quality"],
-            mode="markers+text",
-            text=filtered["Ticker"],
-            textposition="top center",
-            textfont=dict(size=8),
-            marker=dict(
-                size=10,
-                color=filtered["Composite"],
-                colorscale=[[0, "#1a1a2a"], [0.5, "#4ecdc4"], [1, "#00d4aa"]],
-                showscale=True,
-                colorbar=dict(title="COMP", titlefont=dict(size=9)),
-                line=dict(width=0.5, color="#0a0a0f"),
-            ),
-        ))
-        fig_vq.add_hline(y=filtered["Quality"].median(), line_dash="dot", line_color="#333", line_width=1)
-        fig_vq.add_vline(x=filtered["Value"].median(), line_dash="dot", line_color="#333", line_width=1)
-        fig_vq.update_layout(xaxis_title="VALUE", yaxis_title="QUALITY")
-        apply_chart_theme(fig_vq, 450)
-        fig_vq.update_layout(title="VALUE vs QUALITY")
-        st.plotly_chart(fig_vq, use_container_width=True)
-
-    with fac_r:
-        # Strength vs Momentum scatter
-        fig_sm = go.Figure()
-        fig_sm.add_trace(go.Scatter(
-            x=filtered["Strength"], y=filtered["Momentum"],
-            mode="markers+text",
-            text=filtered["Ticker"],
-            textposition="top center",
-            textfont=dict(size=8),
-            marker=dict(
-                size=10,
-                color=filtered["Composite"],
-                colorscale=[[0, "#1a1a2a"], [0.5, "#4ecdc4"], [1, "#00d4aa"]],
-                showscale=True,
-                colorbar=dict(title="COMP", titlefont=dict(size=9)),
-                line=dict(width=0.5, color="#0a0a0f"),
-            ),
-        ))
-        fig_sm.add_hline(y=filtered["Momentum"].median(), line_dash="dot", line_color="#333", line_width=1)
-        fig_sm.add_vline(x=filtered["Strength"].median(), line_dash="dot", line_color="#333", line_width=1)
-        fig_sm.update_layout(xaxis_title="STRENGTH", yaxis_title="MOMENTUM")
-        apply_chart_theme(fig_sm, 450)
-        fig_sm.update_layout(title="STRENGTH vs MOMENTUM")
-        st.plotly_chart(fig_sm, use_container_width=True)
-
-    # Correlation heatmap
-    st.markdown("### FACTOR CORRELATIONS")
-    corr_cols = ["Composite", "Value", "Quality", "Strength", "Momentum",
-                 "pe_trailing", "pb_ratio", "dividend_yield", "roe", "cash_to_mcap",
-                 "ev_to_ebitda", "debt_to_equity", "beta", "fcf_yield"]
-    corr_labels = ["COMP", "VAL", "QUAL", "STR", "MOM",
-                   "P/E", "P/B", "DIV", "ROE", "CASH/MC",
-                   "EV/EBITDA", "D/E", "BETA", "FCF_Y"]
-    corr_data = filtered[corr_cols].apply(pd.to_numeric, errors="coerce")
-    corr_matrix = corr_data.corr()
-
-    fig_corr = go.Figure(data=go.Heatmap(
-        z=corr_matrix.values,
-        x=corr_labels,
-        y=corr_labels,
-        colorscale=[[0, "#ff6b6b"], [0.5, "#0a0a0f"], [1, "#00d4aa"]],
-        zmin=-1, zmax=1,
-        text=corr_matrix.round(2).values,
-        texttemplate="%{text}",
-        textfont=dict(size=9),
-    ))
-    apply_chart_theme(fig_corr, 500)
-    fig_corr.update_layout(title="CROSS-FACTOR CORRELATION MATRIX")
-    st.plotly_chart(fig_corr, use_container_width=True)
-
-    # Factor distributions
-    st.markdown("### FACTOR DISTRIBUTIONS")
-    fd1, fd2, fd3, fd4 = st.columns(4)
-    for col_widget, factor, color in [
-        (fd1, "Value", "#00d4aa"),
-        (fd2, "Quality", "#4ecdc4"),
-        (fd3, "Strength", "#a855f7"),
-        (fd4, "Momentum", "#ffe66d"),
-    ]:
-        with col_widget:
-            fig_fd = go.Figure()
-            fig_fd.add_trace(go.Histogram(
-                x=filtered[factor], nbinsx=20,
-                marker_color=color, marker_line_width=0, opacity=0.8,
-            ))
-            apply_chart_theme(fig_fd, 250)
-            fig_fd.update_layout(title=factor.upper(), xaxis_title="", yaxis_title="",
-                                 margin=dict(l=30, r=10, t=35, b=30))
-            st.plotly_chart(fig_fd, use_container_width=True)
-
-
-# ════════════════════════════════════════════════════════════════
-# TAB: RISK
-# ════════════════════════════════════════════════════════════════
-with tab_risk:
-    st.markdown("### RISK ANALYSIS")
-
-    risk_l, risk_r = st.columns(2)
-
-    with risk_l:
-        # Beta distribution
-        fig_beta = go.Figure()
-        fig_beta.add_trace(go.Scatter(
-            x=filtered["Ticker"],
-            y=filtered["beta"].fillna(1),
-            mode="markers+lines",
-            marker=dict(
-                color=np.where(filtered["beta"].fillna(1) > 1, "#ff6b6b", "#00d4aa"),
-                size=8,
-            ),
-            line=dict(color="#1a1a2a", width=1),
-        ))
-        fig_beta.add_hline(y=1.0, line_dash="dash", line_color="#555", line_width=1,
-                           annotation_text="BETA=1.0", annotation_font_color="#555")
-        fig_beta.update_layout(xaxis_title="", yaxis_title="BETA",
-                               xaxis=dict(tickangle=-45, tickfont=dict(size=9)))
-        apply_chart_theme(fig_beta, 400)
-        fig_beta.update_layout(title="BETA PROFILE")
-        st.plotly_chart(fig_beta, use_container_width=True)
-
-    with risk_r:
-        # Leverage: D/E vs Current Ratio
-        fig_lev = go.Figure()
-        de_clean = filtered["debt_to_equity"].fillna(0)
-        cr_clean = filtered["current_ratio"].fillna(1)
-        fig_lev.add_trace(go.Scatter(
-            x=de_clean, y=cr_clean,
-            mode="markers+text",
-            text=filtered["Ticker"],
-            textposition="top center",
-            textfont=dict(size=8),
-            marker=dict(
-                size=10,
-                color=filtered["Composite"],
-                colorscale=[[0, "#1a1a2a"], [0.5, "#4ecdc4"], [1, "#00d4aa"]],
-                showscale=True,
-                colorbar=dict(title="COMP", titlefont=dict(size=9)),
-                line=dict(width=0.5, color="#0a0a0f"),
-            ),
-        ))
-        fig_lev.add_vline(x=100, line_dash="dot", line_color="#ff6b6b", line_width=1,
-                          annotation_text="D/E=100", annotation_font_color="#555")
-        fig_lev.add_hline(y=1.0, line_dash="dot", line_color="#ffe66d", line_width=1,
-                          annotation_text="CR=1.0", annotation_font_color="#555")
-        fig_lev.update_layout(xaxis_title="DEBT/EQUITY", yaxis_title="CURRENT RATIO")
-        apply_chart_theme(fig_lev, 400)
-        fig_lev.update_layout(title="LEVERAGE MAP")
-        st.plotly_chart(fig_lev, use_container_width=True)
-
-    # Net cash analysis
-    st.markdown("### NET CASH POSITION")
-    net_cash_df = filtered[["Ticker", "Name", "net_cash_b", "cash_to_mcap", "mcap_b"]].copy()
-    net_cash_df = net_cash_df.sort_values("net_cash_b", ascending=False)
-
-    fig_nc = go.Figure()
-    fig_nc.add_trace(go.Bar(
-        x=net_cash_df["Ticker"],
-        y=net_cash_df["net_cash_b"],
-        marker_color=np.where(net_cash_df["net_cash_b"] >= 0, "#00d4aa", "#ff6b6b"),
-        marker_line_width=0,
-    ))
-    fig_nc.update_layout(xaxis_title="", yaxis_title="NET CASH (JPY B)",
-                         xaxis=dict(tickangle=-45, tickfont=dict(size=9)))
-    apply_chart_theme(fig_nc, 350)
-    fig_nc.update_layout(title="NET CASH: TOTAL_CASH - TOTAL_DEBT")
-    st.plotly_chart(fig_nc, use_container_width=True)
-
-
-# ════════════════════════════════════════════════════════════════
-# TAB: COMPARE
-# ════════════════════════════════════════════════════════════════
-with tab_compare:
-    st.markdown("### STOCK COMPARISON")
-
-    compare_stocks = st.multiselect(
-        "Select stocks to compare (2-6)",
-        filtered["Ticker"].tolist(),
-        default=filtered["Ticker"].tolist()[:3],
-        max_selections=6,
-    )
-
-    if len(compare_stocks) >= 2:
-        comp_df = filtered[filtered["Ticker"].isin(compare_stocks)]
-
-        # Overlaid radar
-        fig_comp_radar = go.Figure()
-        colors = ["#00d4aa", "#ff6b6b", "#4ecdc4", "#ffe66d", "#a855f7", "#06b6d4"]
-        for i, (_, r) in enumerate(comp_df.iterrows()):
+        with eq_r:
+            # Radar
             vals = [r["Value"], r["Quality"], r["Strength"], r["Momentum"], r["Value"]]
-            fig_comp_radar.add_trace(go.Scatterpolar(
-                r=vals,
-                theta=["VAL", "QUAL", "STR", "MOM", "VAL"],
-                fill="toself",
-                fillcolor=f"rgba({int(colors[i][1:3],16)},{int(colors[i][3:5],16)},{int(colors[i][5:7],16)},0.1)",
-                line=dict(color=colors[i], width=2),
-                name=r["Ticker"],
+            fig = go.Figure()
+            fig.add_trace(go.Scatterpolar(
+                r=vals, theta=["VAL", "QUAL", "STR", "MOM", "VAL"],
+                fill="toself", fillcolor=f"rgba(255,140,0,0.1)", line=dict(color=ORANGE, width=2),
             ))
-        fig_comp_radar.update_layout(
-            polar=dict(
-                radialaxis=dict(visible=True, range=[0, 1], tickfont=dict(size=8), gridcolor="#1a1a2a"),
-                angularaxis=dict(tickfont=dict(size=10, color="#c8c8c8"), gridcolor="#1a1a2a"),
-                bgcolor="#0a0a0f",
-            ),
-        )
-        apply_chart_theme(fig_comp_radar, 450)
-        fig_comp_radar.update_layout(title="FACTOR OVERLAY")
-        st.plotly_chart(fig_comp_radar, use_container_width=True)
+            fig.update_layout(**chart_layout(220),
+                polar=dict(radialaxis=dict(visible=True, range=[0,1], tickfont=dict(size=8), gridcolor=BORDER),
+                           angularaxis=dict(tickfont=dict(size=9, color=WHITE), gridcolor=BORDER),
+                           bgcolor=BG1),
+                title="FACTOR PROFILE")
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Fundamentals grid
+        fl, fm, fr = st.columns(3)
+
+        with fl:
+            st.markdown("### VALUATION")
+            vdata = [
+                ("P/E Trailing", f_num(r.get("pe_trailing")), pct_rank(df["pe_trailing"], r.get("pe_trailing"))),
+                ("P/E Forward", f_num(r.get("pe_forward")), pct_rank(df["pe_forward"], r.get("pe_forward"))),
+                ("P/B", f_num(r.get("pb_ratio")), pct_rank(df["pb_ratio"], r.get("pb_ratio"))),
+                ("P/S", f_num(r.get("price_to_sales")), pct_rank(df["price_to_sales"], r.get("price_to_sales"))),
+                ("EV/EBITDA", f_num(r.get("ev_to_ebitda")), pct_rank(df["ev_to_ebitda"], r.get("ev_to_ebitda"))),
+                ("EV/FCF", f_num(r.get("ev_to_fcf")), "--"),
+                ("Div Yield", f_pct(r.get("dividend_yield")), pct_rank(df["dividend_yield"], r.get("dividend_yield"))),
+                ("FCF Yield", f_pct(r.get("fcf_yield")), pct_rank(df["fcf_yield"], r.get("fcf_yield"))),
+                ("Cash/MCap", f_pct(r.get("cash_to_mcap")), pct_rank(df["cash_to_mcap"], r.get("cash_to_mcap"))),
+            ]
+            st.dataframe(pd.DataFrame(vdata, columns=["METRIC", "VALUE", "PCTLE"]),
+                         use_container_width=True, hide_index=True, height=350)
+
+        with fm:
+            st.markdown("### QUALITY")
+            qdata = [
+                ("ROE", f_pct(r.get("roe")), pct_rank(df["roe"], r.get("roe"))),
+                ("ROA", f_pct(r.get("roa")), pct_rank(df["roa"], r.get("roa"))),
+                ("Op Margin", f_pct(r.get("operating_margin")), pct_rank(df["operating_margin"], r.get("operating_margin"))),
+                ("Net Margin", f_pct(r.get("profit_margin")), pct_rank(df["profit_margin"], r.get("profit_margin"))),
+                ("Rev Growth", f_pct(r.get("revenue_growth")), pct_rank(df["revenue_growth"], r.get("revenue_growth"))),
+                ("Earn Growth", f_pct(r.get("earnings_growth")), pct_rank(df["earnings_growth"], r.get("earnings_growth"))),
+                ("Quality Flags", f_num(r.get("quality_flags"), 0), f"{r['quality_flags']}/7"),
+            ]
+            st.dataframe(pd.DataFrame(qdata, columns=["METRIC", "VALUE", "PCTLE"]),
+                         use_container_width=True, hide_index=True, height=350)
+
+        with fr:
+            st.markdown("### BALANCE SHEET")
+            bdata = [
+                ("Market Cap", f_jpy(r.get("market_cap")), pct_rank(df["market_cap"], r.get("market_cap"))),
+                ("Enterprise Val", f_jpy(r.get("enterprise_value")), "--"),
+                ("Total Cash", f_jpy(r.get("total_cash")), "--"),
+                ("Total Debt", f_jpy(r.get("total_debt")), "--"),
+                ("Net Cash", f_jpy(r.get("net_cash")), "dc-green" if r.get("net_cash", 0) > 0 else "dc-red"),
+                ("D/E", f_num(r.get("debt_to_equity"), 0), pct_rank(df["debt_to_equity"], r.get("debt_to_equity"))),
+                ("Current Ratio", f_num(r.get("current_ratio")), pct_rank(df["current_ratio"], r.get("current_ratio"))),
+                ("Beta", f_num(r.get("beta")), pct_rank(df["beta"], r.get("beta"))),
+            ]
+            st.dataframe(pd.DataFrame(bdata, columns=["METRIC", "VALUE", "PCTLE"]),
+                         use_container_width=True, hide_index=True, height=350)
+
+        # 52W range
+        if pd.notna(r.get("fifty_two_week_low")) and pd.notna(r.get("fifty_two_week_high")):
+            lo, hi, pr = r["fifty_two_week_low"], r["fifty_two_week_high"], r.get("current_price", 0)
+            pct = (pr - lo) / (hi - lo) * 100 if hi != lo else 50
+            st.markdown(strip_html([
+                ("52W LOW", f_price(lo), "dc-red"),
+                ("CURRENT", f_price(pr), "dc-orange"),
+                ("52W HIGH", f_price(hi), "dc-green"),
+                ("POSITION", f"{pct:.0f}%", "dc-orange" if pct > 30 else "dc-red"),
+                ("SMA50", f_price(r.get("fifty_day_avg")), ""),
+                ("SMA200", f_price(r.get("two_hundred_day_avg")), ""),
+                ("SMA CROSS", f"{r.get('sma_cross', 0)*100:.1f}%" if pd.notna(r.get("sma_cross")) else "--",
+                 "dc-green" if r.get("sma_cross", 0) > 0 else "dc-red"),
+                ("AVG VOL", f"{r.get('avg_volume', 0):,.0f}" if pd.notna(r.get("avg_volume")) else "--", ""),
+            ]), unsafe_allow_html=True)
+
+
+# ════════════════════════════════════════════════════════════════
+# VALUATION
+# ════════════════════════════════════════════════════════════════
+with t_val:
+    vl, vr = st.columns(2)
+
+    with vl:
+        # P/B ranking
+        pb_sorted = flt[["Ticker", "pb_ratio"]].dropna(subset=["pb_ratio"]).sort_values("pb_ratio")
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=pb_sorted["Ticker"], y=pb_sorted["pb_ratio"],
+            marker_color=np.where(pb_sorted["pb_ratio"] < 1.0, GREEN, np.where(pb_sorted["pb_ratio"] < 1.5, ORANGE, RED)),
+            marker_line_width=0,
+        ))
+        fig.add_hline(y=1.0, line_dash="dash", line_color=GRAY, annotation_text="BOOK VALUE", annotation_font=dict(size=9, color=GRAY))
+        fig.update_layout(**chart_layout(350), title="P/B RATIO (SORTED)",
+                          xaxis=dict(tickangle=-45, tickfont=dict(size=8)))
+        st.plotly_chart(fig, use_container_width=True)
+
+    with vr:
+        # Dividend yield ranking
+        div_sorted = flt[["Ticker", "dividend_yield"]].dropna(subset=["dividend_yield"]).sort_values("dividend_yield", ascending=False)
+        div_sorted["div_pct"] = div_sorted["dividend_yield"] * 100
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=div_sorted["Ticker"], y=div_sorted["div_pct"],
+            marker_color=np.where(div_sorted["div_pct"] >= 3.0, GREEN, np.where(div_sorted["div_pct"] >= 2.0, ORANGE, GRAY)),
+            marker_line_width=0,
+        ))
+        fig.add_hline(y=2.0, line_dash="dash", line_color=GRAY, annotation_text="2%", annotation_font=dict(size=9, color=GRAY))
+        fig.update_layout(**chart_layout(350), title="DIVIDEND YIELD % (SORTED)",
+                          xaxis=dict(tickangle=-45, tickfont=dict(size=8)))
+        st.plotly_chart(fig, use_container_width=True)
+
+    # EV/EBITDA vs FCF Yield
+    fig = go.Figure()
+    ev_data = flt.dropna(subset=["ev_to_ebitda", "fcf_yield"])
+    fig.add_trace(go.Scatter(
+        x=ev_data["ev_to_ebitda"], y=ev_data["fcf_yield"] * 100,
+        mode="markers+text", text=ev_data["Ticker"], textposition="top center",
+        textfont=dict(size=8, color=GRAY),
+        marker=dict(size=9, color=ORANGE, line=dict(width=0.5, color=BG)),
+    ))
+    fig.add_hline(y=5.0, line_dash="dot", line_color=GRAY_DIM)
+    fig.add_vline(x=10.0, line_dash="dot", line_color=GRAY_DIM)
+    fig.update_layout(**chart_layout(380), title="EV/EBITDA vs FCF YIELD",
+                      xaxis_title="EV/EBITDA", yaxis_title="FCF YIELD %")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# ════════════════════════════════════════════════════════════════
+# QUALITY
+# ════════════════════════════════════════════════════════════════
+with t_qual:
+    ql, qr = st.columns(2)
+
+    with ql:
+        # ROE ranking
+        roe_sorted = flt[["Ticker", "roe"]].dropna(subset=["roe"]).sort_values("roe", ascending=False)
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=roe_sorted["Ticker"], y=roe_sorted["roe"] * 100,
+            marker_color=np.where(roe_sorted["roe"] >= 0.10, GREEN, np.where(roe_sorted["roe"] >= 0.05, ORANGE, RED)),
+            marker_line_width=0,
+        ))
+        fig.add_hline(y=8.0, line_dash="dash", line_color=GRAY, annotation_text="8% MIN", annotation_font=dict(size=9, color=GRAY))
+        fig.update_layout(**chart_layout(300), title="ROE % (SORTED)",
+                          xaxis=dict(tickangle=-45, tickfont=dict(size=8)))
+        st.plotly_chart(fig, use_container_width=True)
+
+    with qr:
+        # Quality flags distribution
+        qf_counts = flt["quality_flags"].value_counts().sort_index()
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=qf_counts.index, y=qf_counts.values,
+            marker_color=[RED if x <= 2 else YELLOW if x <= 4 else GREEN for x in qf_counts.index],
+            marker_line_width=0,
+        ))
+        fig.update_layout(**chart_layout(300), title="QUALITY FLAGS DISTRIBUTION (0-7)",
+                          xaxis_title="FLAGS PASSED", yaxis_title="COUNT")
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ROE vs Operating Margin
+    fig = go.Figure()
+    rm_data = flt.dropna(subset=["roe", "operating_margin"])
+    fig.add_trace(go.Scatter(
+        x=rm_data["roe"] * 100, y=rm_data["operating_margin"] * 100,
+        mode="markers+text", text=rm_data["Ticker"], textposition="top center",
+        textfont=dict(size=8, color=GRAY),
+        marker=dict(size=np.clip(rm_data["mcap_b"].fillna(1).apply(np.log) * 4, 4, 20),
+                    color=ORANGE, line=dict(width=0.5, color=BG)),
+    ))
+    fig.add_hline(y=5.0, line_dash="dot", line_color=GRAY_DIM)
+    fig.add_vline(x=8.0, line_dash="dot", line_color=GRAY_DIM)
+    fig.update_layout(**chart_layout(350), title="ROE vs OPERATING MARGIN",
+                      xaxis_title="ROE %", yaxis_title="OP MARGIN %")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# ════════════════════════════════════════════════════════════════
+# RISK
+# ════════════════════════════════════════════════════════════════
+with t_risk:
+    rl, rr = st.columns(2)
+
+    with rl:
+        # Beta
+        beta_sorted = flt[["Ticker", "beta"]].dropna(subset=["beta"]).sort_values("beta")
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=beta_sorted["Ticker"], y=beta_sorted["beta"],
+            marker_color=np.where(beta_sorted["beta"] > 1.0, RED, GREEN),
+            marker_line_width=0,
+        ))
+        fig.add_hline(y=1.0, line_dash="dash", line_color=GRAY)
+        fig.update_layout(**chart_layout(300), title="BETA (SORTED)",
+                          xaxis=dict(tickangle=-45, tickfont=dict(size=8)))
+        st.plotly_chart(fig, use_container_width=True)
+
+    with rr:
+        # Net cash
+        nc_sorted = flt[["Ticker", "net_cash_b"]].sort_values("net_cash_b", ascending=False)
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=nc_sorted["Ticker"], y=nc_sorted["net_cash_b"],
+            marker_color=np.where(nc_sorted["net_cash_b"] >= 0, GREEN, RED),
+            marker_line_width=0,
+        ))
+        fig.update_layout(**chart_layout(300), title="NET CASH (JPY B)",
+                          xaxis=dict(tickangle=-45, tickfont=dict(size=8)))
+        st.plotly_chart(fig, use_container_width=True)
+
+    # D/E vs Current Ratio
+    fig = go.Figure()
+    lev_data = flt.dropna(subset=["debt_to_equity", "current_ratio"])
+    fig.add_trace(go.Scatter(
+        x=lev_data["debt_to_equity"], y=lev_data["current_ratio"],
+        mode="markers+text", text=lev_data["Ticker"], textposition="top center",
+        textfont=dict(size=8, color=GRAY),
+        marker=dict(size=9, color=ORANGE, line=dict(width=0.5, color=BG)),
+    ))
+    fig.add_hline(y=1.0, line_dash="dot", line_color=YELLOW, annotation_text="CR=1.0",
+                  annotation_font=dict(size=9, color=GRAY))
+    fig.add_vline(x=100, line_dash="dot", line_color=RED, annotation_text="D/E=100",
+                  annotation_font=dict(size=9, color=GRAY))
+    fig.update_layout(**chart_layout(350), title="LEVERAGE MAP", xaxis_title="D/E", yaxis_title="CURRENT RATIO")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Correlation matrix
+    corr_cols = ["Composite", "Value", "Quality", "Strength", "Momentum",
+                 "pe_trailing", "pb_ratio", "dividend_yield", "roe", "beta", "fcf_yield"]
+    corr_labels = ["COMP", "VAL", "QUAL", "STR", "MOM", "P/E", "P/B", "DIV", "ROE", "BETA", "FCF"]
+    cm = flt[corr_cols].apply(pd.to_numeric, errors="coerce").corr()
+    fig = go.Figure(data=go.Heatmap(
+        z=cm.values, x=corr_labels, y=corr_labels,
+        colorscale=[[0, RED], [0.5, BG1], [1, GREEN]],
+        zmin=-1, zmax=1, text=cm.round(2).values, texttemplate="%{text}", textfont=dict(size=9),
+    ))
+    fig.update_layout(**chart_layout(400), title="FACTOR CORRELATION")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# ════════════════════════════════════════════════════════════════
+# TECHNICALS
+# ════════════════════════════════════════════════════════════════
+with t_tech:
+    # Technical signals table
+    tech_data = flt[["Ticker", "Name", "current_price", "fifty_day_avg", "two_hundred_day_avg",
+                     "fifty_two_week_high", "fifty_two_week_low", "52w_pos", "sma_cross", "beta", "avg_volume"]].copy()
+    tech_data["SMA50"] = tech_data["fifty_day_avg"].apply(lambda x: f_price(x))
+    tech_data["SMA200"] = tech_data["two_hundred_day_avg"].apply(lambda x: f_price(x))
+    tech_data["PRICE"] = tech_data["current_price"].apply(lambda x: f_price(x))
+    tech_data["52W_HI"] = tech_data["fifty_two_week_high"].apply(lambda x: f_price(x))
+    tech_data["52W_LO"] = tech_data["fifty_two_week_low"].apply(lambda x: f_price(x))
+    tech_data["52W_%"] = tech_data["52w_pos"].apply(lambda x: f"{x*100:.0f}%" if pd.notna(x) else "--")
+    tech_data["SMA_X%"] = tech_data["sma_cross"].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) else "--")
+    tech_data["SIGNAL"] = tech_data["sma_cross"].apply(
+        lambda x: "GOLDEN" if pd.notna(x) and x > 0.02 else ("DEATH" if pd.notna(x) and x < -0.02 else "NEUTRAL"))
+    tech_data["VOL"] = tech_data["avg_volume"].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "--")
+    tech_data["BETA"] = tech_data["beta"].apply(lambda x: f_num(x))
+
+    display_tech = tech_data[["Ticker", "Name", "PRICE", "SMA50", "SMA200", "SMA_X%", "SIGNAL",
+                               "52W_LO", "52W_HI", "52W_%", "VOL", "BETA"]]
+    display_tech.columns = ["TICKER", "NAME", "PRICE", "SMA50", "SMA200", "SMA_X", "SIGNAL",
+                            "52W_LO", "52W_HI", "52W_%", "AVG_VOL", "BETA"]
+    st.dataframe(display_tech, use_container_width=True, height=500)
+
+    tl, tr = st.columns(2)
+    with tl:
+        # 52-week position ranking
+        pos_sorted = flt[["Ticker", "52w_pos"]].dropna(subset=["52w_pos"]).sort_values("52w_pos", ascending=False)
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=pos_sorted["Ticker"], y=pos_sorted["52w_pos"] * 100,
+            marker_color=np.where(pos_sorted["52w_pos"] > 0.7, GREEN, np.where(pos_sorted["52w_pos"] > 0.3, ORANGE, RED)),
+            marker_line_width=0,
+        ))
+        fig.add_hline(y=50, line_dash="dash", line_color=GRAY)
+        fig.update_layout(**chart_layout(300), title="52W RANGE POSITION %",
+                          xaxis=dict(tickangle=-45, tickfont=dict(size=8)))
+        st.plotly_chart(fig, use_container_width=True)
+
+    with tr:
+        # SMA cross
+        sma_sorted = flt[["Ticker", "sma_cross"]].dropna(subset=["sma_cross"]).sort_values("sma_cross", ascending=False)
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=sma_sorted["Ticker"], y=sma_sorted["sma_cross"] * 100,
+            marker_color=np.where(sma_sorted["sma_cross"] > 0, GREEN, RED),
+            marker_line_width=0,
+        ))
+        fig.add_hline(y=0, line_dash="dash", line_color=GRAY)
+        fig.update_layout(**chart_layout(300), title="SMA50/SMA200 CROSS %",
+                          xaxis=dict(tickangle=-45, tickfont=dict(size=8)),
+                          yaxis_title="% ABOVE/BELOW")
+        st.plotly_chart(fig, use_container_width=True)
+
+
+# ════════════════════════════════════════════════════════════════
+# COMPARE
+# ════════════════════════════════════════════════════════════════
+with t_comp:
+    compare_tickers = st.multiselect("SELECT (2-6)", flt["Ticker"].tolist(),
+                                     default=flt["Ticker"].tolist()[:3], max_selections=6, key="comp_sel")
+
+    if len(compare_tickers) >= 2:
+        cdf = flt[flt["Ticker"].isin(compare_tickers)]
+        colors = [ORANGE, GREEN, "#06b6d4", YELLOW, "#a855f7", RED]
+
+        cl, cr = st.columns(2)
+
+        with cl:
+            # Radar overlay
+            fig = go.Figure()
+            for i, (_, row) in enumerate(cdf.iterrows()):
+                vals = [row["Value"], row["Quality"], row["Strength"], row["Momentum"], row["Value"]]
+                fig.add_trace(go.Scatterpolar(
+                    r=vals, theta=["VAL", "QUAL", "STR", "MOM", "VAL"],
+                    fill="toself",
+                    fillcolor=f"rgba({int(colors[i][1:3],16)},{int(colors[i][3:5],16)},{int(colors[i][5:7],16)},0.08)",
+                    line=dict(color=colors[i], width=2), name=row["Ticker"],
+                ))
+            fig.update_layout(**chart_layout(380, showlegend=True),
+                polar=dict(radialaxis=dict(visible=True, range=[0,1], tickfont=dict(size=8), gridcolor=BORDER),
+                           angularaxis=dict(tickfont=dict(size=9, color=WHITE), gridcolor=BORDER),
+                           bgcolor=BG1),
+                title="FACTOR OVERLAY")
+            fig.update_layout(legend=dict(orientation="h", y=1.08))
+            st.plotly_chart(fig, use_container_width=True)
+
+        with cr:
+            # Normalized price
+            fig = go.Figure()
+            for i, ticker in enumerate(compare_tickers):
+                prices = load_prices(ticker, years=3)
+                if not prices.empty:
+                    if isinstance(prices.columns, pd.MultiIndex):
+                        close = prices[("Close", ticker)] if ("Close", ticker) in prices.columns else prices.iloc[:, 0]
+                    else:
+                        close = prices["Close"] if "Close" in prices.columns else prices.iloc[:, 0]
+                    norm = close / close.iloc[0] * 100
+                    fig.add_trace(go.Scatter(x=prices.index, y=norm, mode="lines",
+                        line=dict(color=colors[i], width=1.5), name=ticker))
+            fig.add_hline(y=100, line_dash="dot", line_color=GRAY_DIM)
+            fig.update_layout(**chart_layout(380, showlegend=True), title="RELATIVE PERFORMANCE (3Y, INDEXED)")
+            fig.update_layout(legend=dict(orientation="h", y=1.08), yaxis_title="INDEXED")
+            st.plotly_chart(fig, use_container_width=True)
 
         # Comparison table
-        comp_table = comp_df[["Ticker", "Name", "Sector", "Composite", "Value", "Quality",
-                               "Strength", "Momentum", "pe_trailing", "pb_ratio",
-                               "dividend_yield", "roe", "ev_to_ebitda", "debt_to_equity",
-                               "cash_to_mcap", "beta", "mcap_b"]].copy()
-        comp_table.columns = ["TICKER", "NAME", "SECTOR", "COMP", "VAL", "QUAL", "STR", "MOM",
-                              "P/E", "P/B", "DIV%", "ROE%", "EV/EBITDA", "D/E", "CASH/MC%", "BETA", "MCAP(B)"]
-        comp_table["DIV%"] = comp_table["DIV%"].apply(lambda x: f"{x*100:.1f}" if pd.notna(x) else "--")
-        comp_table["ROE%"] = comp_table["ROE%"].apply(lambda x: f"{x*100:.1f}" if pd.notna(x) else "--")
-        comp_table["CASH/MC%"] = comp_table["CASH/MC%"].apply(lambda x: f"{x*100:.1f}" if pd.notna(x) else "--")
-        st.dataframe(comp_table, use_container_width=True, hide_index=True)
-
-        # Price overlay
-        st.markdown("### NORMALIZED PRICE COMPARISON (3Y)")
-        fig_price_comp = go.Figure()
-        for i, ticker in enumerate(compare_stocks):
-            prices = load_price_data(ticker, years=3)
-            if not prices.empty:
-                close_col = "Close"
-                if isinstance(prices.columns, pd.MultiIndex):
-                    close_col = ("Close", ticker) if ("Close", ticker) in prices.columns else prices.columns[0]
-                close = prices[close_col] if close_col in prices.columns else prices.iloc[:, 0]
-                normalized = close / close.iloc[0] * 100
-                fig_price_comp.add_trace(go.Scatter(
-                    x=prices.index, y=normalized,
-                    mode="lines",
-                    line=dict(color=colors[i], width=1.5),
-                    name=ticker,
-                ))
-        fig_price_comp.add_hline(y=100, line_dash="dot", line_color="#333", line_width=1)
-        fig_price_comp.update_layout(xaxis_title="", yaxis_title="INDEXED (100 = START)")
-        apply_chart_theme(fig_price_comp, 400)
-        fig_price_comp.update_layout(title="RELATIVE PERFORMANCE", legend=dict(orientation="h", y=1.08))
-        st.plotly_chart(fig_price_comp, use_container_width=True)
+        ctbl = cdf[["Ticker", "Name", "Sector", "Composite", "Value", "Quality", "Strength", "Momentum",
+                     "pe_trailing", "pb_ratio", "dividend_yield", "roe", "ev_to_ebitda",
+                     "debt_to_equity", "cash_to_mcap", "fcf_yield", "beta", "mcap_b", "quality_flags"]].copy()
+        ctbl.columns = ["TICKER", "NAME", "SECTOR", "COMP", "VAL", "QUAL", "STR", "MOM",
+                        "P/E", "P/B", "DIV%", "ROE%", "EV/EB", "D/E", "CASH/MC", "FCF_Y", "BETA", "MCAP_B", "QF"]
+        for c in ["DIV%", "ROE%", "CASH/MC", "FCF_Y"]:
+            ctbl[c] = ctbl[c].apply(lambda x: f"{x*100:.1f}" if pd.notna(x) else "--")
+        st.dataframe(ctbl, use_container_width=True, hide_index=True)
     else:
-        st.info("Select at least 2 stocks to compare.")
+        st.info("Select at least 2 stocks.")
 
 
 # ── Footer ─────────────────────────────────────────────────────
-st.markdown("---")
-st.markdown(
-    '<div style="color:#333; font-size:9px; text-align:center; font-family:monospace;">'
-    'JVQ TERMINAL v1.0 | MODEL: japan_deep_value_v1 | DATA: yfinance | '
-    f'UNIVERSE: {len(df)} STOCKS | LAST UPDATE: {pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")}'
-    '</div>',
-    unsafe_allow_html=True,
-)
+st.markdown(f"""
+<div style="text-align:center; color:{GRAY_DIM}; font-size:8px; padding:8px; border-top:1px solid {BORDER}; margin-top:12px;">
+JVQ TERMINAL v1.0 | BUILT BY NOAH | {len(df)} EQUITIES | {pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")} | DATA: YFINANCE | NOT FINANCIAL ADVICE
+</div>
+""", unsafe_allow_html=True)
