@@ -47,10 +47,12 @@ def chart_layout(height=300, **kw):
         xaxis=dict(gridcolor=BORDER, zerolinecolor=BORDER, tickfont=dict(size=9)),
         yaxis=dict(gridcolor=BORDER, zerolinecolor=BORDER, tickfont=dict(size=9)),
         title_font=dict(size=11, color=ORANGE),
-        legend=dict(font=dict(size=9), bgcolor="rgba(0,0,0,0)"),
         showlegend=False,
     )
     base.update(kw)
+    # ensure legend defaults if not overridden
+    if "legend" not in base:
+        base["legend"] = dict(font=dict(size=9), bgcolor="rgba(0,0,0,0)")
     return base
 
 st.markdown(f"""
@@ -273,10 +275,47 @@ def load_prices(ticker, years=3):
     return fetch_price_history(ticker, years=years, cache_dir="data/cache")
 
 
-# ── Load ───────────────────────────────────────────────────────
-with st.spinner(""):
-    df, fundamentals, results = load_data()
+# ── Loading Screen ─────────────────────────────────────────────
+loading = st.empty()
+loading.markdown(f"""
+<div style="
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    height: 80vh; background: {BG}; font-family: {FONT};
+">
+    <div style="color: {ORANGE}; font-size: 32px; font-weight: 600; letter-spacing: 6px; margin-bottom: 24px;">
+        JVQ
+    </div>
+    <div style="color: {GRAY}; font-size: 11px; letter-spacing: 3px; margin-bottom: 32px;">
+        JAPAN VALUE QUANT TERMINAL
+    </div>
+    <div style="display: flex; gap: 6px; margin-bottom: 24px;">
+        <div style="width: 8px; height: 8px; background: {ORANGE}; animation: pulse 1.2s ease-in-out infinite;"></div>
+        <div style="width: 8px; height: 8px; background: {ORANGE}; animation: pulse 1.2s ease-in-out 0.2s infinite;"></div>
+        <div style="width: 8px; height: 8px; background: {ORANGE}; animation: pulse 1.2s ease-in-out 0.4s infinite;"></div>
+        <div style="width: 8px; height: 8px; background: {ORANGE}; animation: pulse 1.2s ease-in-out 0.6s infinite;"></div>
+        <div style="width: 8px; height: 8px; background: {ORANGE}; animation: pulse 1.2s ease-in-out 0.8s infinite;"></div>
+    </div>
+    <div style="color: {GRAY_DIM}; font-size: 10px; letter-spacing: 1px;">
+        CONNECTING TO DATA FEED...
+    </div>
+    <div style="color: {GRAY_DIM}; font-size: 9px; margin-top: 8px;">
+        SCORING 74 EQUITIES ACROSS TOPIX CORE UNIVERSE
+    </div>
+    <div style="margin-top: 40px; color: {GRAY_DIM}; font-size: 8px;">
+        BUILT BY NOAH | v1.0
+    </div>
+</div>
+<style>
+    @keyframes pulse {{
+        0%, 100% {{ opacity: 0.2; transform: scale(0.8); }}
+        50% {{ opacity: 1; transform: scale(1.2); }}
+    }}
+</style>
+""", unsafe_allow_html=True)
+
+df, fundamentals, results = load_data()
 all_sectors = sorted(df["Sector"].dropna().unique().tolist())
+loading.empty()
 
 # ── Top Bar ────────────────────────────────────────────────────
 st.markdown(f"""
