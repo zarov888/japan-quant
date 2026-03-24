@@ -44,15 +44,22 @@ def chart_layout(height=300, **kw):
         font=dict(family=FONT, size=10, color=GRAY),
         margin=dict(l=45, r=10, t=28, b=30),
         height=height,
-        xaxis=dict(gridcolor=BORDER, zerolinecolor=BORDER, tickfont=dict(size=9)),
-        yaxis=dict(gridcolor=BORDER, zerolinecolor=BORDER, tickfont=dict(size=9)),
         title_font=dict(size=11, color=ORANGE),
         showlegend=False,
+        legend=dict(font=dict(size=9), bgcolor="rgba(0,0,0,0)"),
     )
+    # Merge xaxis/yaxis defaults with any overrides
+    xa = dict(gridcolor=BORDER, zerolinecolor=BORDER, tickfont=dict(size=9))
+    ya = dict(gridcolor=BORDER, zerolinecolor=BORDER, tickfont=dict(size=9))
+    if "xaxis" in kw:
+        xa.update(kw.pop("xaxis"))
+    if "yaxis" in kw:
+        ya.update(kw.pop("yaxis"))
+    if "legend" in kw:
+        base["legend"] = kw.pop("legend")
+    base["xaxis"] = xa
+    base["yaxis"] = ya
     base.update(kw)
-    # ensure legend defaults if not overridden
-    if "legend" not in base:
-        base["legend"] = dict(font=dict(size=9), bgcolor="rgba(0,0,0,0)")
     return base
 
 st.markdown(f"""
@@ -548,9 +555,9 @@ with t_idx:
             ))
         fig.add_hline(y=1.0, line_dash="dot", line_color=GRAY_DIM, line_width=1)
         fig.add_vline(x=15.0, line_dash="dot", line_color=GRAY_DIM, line_width=1)
-        fig.update_layout(**chart_layout(450, showlegend=True), title="VALUATION MAP",
-                          xaxis_title="P/E", yaxis_title="P/B",
-                          legend=dict(font=dict(size=8), orientation="v", x=1.02))
+        fig.update_layout(**chart_layout(450, showlegend=True,
+                          legend=dict(font=dict(size=8), orientation="v", x=1.02, bgcolor="rgba(0,0,0,0)")),
+                          title="VALUATION MAP", xaxis_title="P/E", yaxis_title="P/B")
         st.plotly_chart(fig, use_container_width=True)
 
     with ir:
@@ -618,8 +625,8 @@ with t_sec:
         with sl:
             fig = go.Figure()
             fig.add_trace(go.Bar(x=sdf["Ticker"], y=sdf["Composite"], marker_color=ORANGE, marker_line_width=0))
-            fig.update_layout(**chart_layout(300), title=f"COMPOSITE: {sel_sec}",
-                              xaxis=dict(tickangle=-45, tickfont=dict(size=8)))
+            fig.update_layout(**chart_layout(300, xaxis=dict(tickangle=-45, tickfont=dict(size=8))),
+                              title=f"COMPOSITE: {sel_sec}")
             st.plotly_chart(fig, use_container_width=True)
 
         with sr:
@@ -814,8 +821,7 @@ with t_val:
             marker_line_width=0,
         ))
         fig.add_hline(y=1.0, line_dash="dash", line_color=GRAY, annotation_text="BOOK VALUE", annotation_font=dict(size=9, color=GRAY))
-        fig.update_layout(**chart_layout(350), title="P/B RATIO (SORTED)",
-                          xaxis=dict(tickangle=-45, tickfont=dict(size=8)))
+        fig.update_layout(**chart_layout(350, xaxis=dict(tickangle=-45, tickfont=dict(size=8))), title="P/B RATIO (SORTED)")
         st.plotly_chart(fig, use_container_width=True)
 
     with vr:
@@ -829,8 +835,7 @@ with t_val:
             marker_line_width=0,
         ))
         fig.add_hline(y=2.0, line_dash="dash", line_color=GRAY, annotation_text="2%", annotation_font=dict(size=9, color=GRAY))
-        fig.update_layout(**chart_layout(350), title="DIVIDEND YIELD % (SORTED)",
-                          xaxis=dict(tickangle=-45, tickfont=dict(size=8)))
+        fig.update_layout(**chart_layout(350, xaxis=dict(tickangle=-45, tickfont=dict(size=8))), title="DIVIDEND YIELD % (SORTED)")
         st.plotly_chart(fig, use_container_width=True)
 
     # EV/EBITDA vs FCF Yield
@@ -865,8 +870,7 @@ with t_qual:
             marker_line_width=0,
         ))
         fig.add_hline(y=8.0, line_dash="dash", line_color=GRAY, annotation_text="8% MIN", annotation_font=dict(size=9, color=GRAY))
-        fig.update_layout(**chart_layout(300), title="ROE % (SORTED)",
-                          xaxis=dict(tickangle=-45, tickfont=dict(size=8)))
+        fig.update_layout(**chart_layout(300, xaxis=dict(tickangle=-45, tickfont=dict(size=8))), title="ROE % (SORTED)")
         st.plotly_chart(fig, use_container_width=True)
 
     with qr:
@@ -915,8 +919,7 @@ with t_risk:
             marker_line_width=0,
         ))
         fig.add_hline(y=1.0, line_dash="dash", line_color=GRAY)
-        fig.update_layout(**chart_layout(300), title="BETA (SORTED)",
-                          xaxis=dict(tickangle=-45, tickfont=dict(size=8)))
+        fig.update_layout(**chart_layout(300, xaxis=dict(tickangle=-45, tickfont=dict(size=8))), title="BETA (SORTED)")
         st.plotly_chart(fig, use_container_width=True)
 
     with rr:
@@ -928,8 +931,7 @@ with t_risk:
             marker_color=np.where(nc_sorted["net_cash_b"] >= 0, GREEN, RED),
             marker_line_width=0,
         ))
-        fig.update_layout(**chart_layout(300), title="NET CASH (JPY B)",
-                          xaxis=dict(tickangle=-45, tickfont=dict(size=8)))
+        fig.update_layout(**chart_layout(300, xaxis=dict(tickangle=-45, tickfont=dict(size=8))), title="NET CASH (JPY B)")
         st.plotly_chart(fig, use_container_width=True)
 
     # D/E vs Current Ratio
@@ -998,8 +1000,7 @@ with t_tech:
             marker_line_width=0,
         ))
         fig.add_hline(y=50, line_dash="dash", line_color=GRAY)
-        fig.update_layout(**chart_layout(300), title="52W RANGE POSITION %",
-                          xaxis=dict(tickangle=-45, tickfont=dict(size=8)))
+        fig.update_layout(**chart_layout(300, xaxis=dict(tickangle=-45, tickfont=dict(size=8))), title="52W RANGE POSITION %")
         st.plotly_chart(fig, use_container_width=True)
 
     with tr:
@@ -1012,9 +1013,8 @@ with t_tech:
             marker_line_width=0,
         ))
         fig.add_hline(y=0, line_dash="dash", line_color=GRAY)
-        fig.update_layout(**chart_layout(300), title="SMA50/SMA200 CROSS %",
-                          xaxis=dict(tickangle=-45, tickfont=dict(size=8)),
-                          yaxis_title="% ABOVE/BELOW")
+        fig.update_layout(**chart_layout(300, xaxis=dict(tickangle=-45, tickfont=dict(size=8))),
+                          title="SMA50/SMA200 CROSS %", yaxis_title="% ABOVE/BELOW")
         st.plotly_chart(fig, use_container_width=True)
 
 
