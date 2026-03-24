@@ -1,0 +1,31 @@
+# Japan Equities Universe Configuration
+# Tickers use TSE format: {code}.T
+
+universe: "topix500"
+
+# Manual watchlist (override or supplement)
+watchlist:
+  - "7203.T"   # Toyota
+  - "6758.T"   # Sony
+  - "8306.T"   # MUFG
+  - "9984.T"   # SoftBank Group
+  - "6861.T"   # Keyence
+  - "7267.T"   # Honda
+  - "8035.T"   # Tokyo Electron
+  - "6501.T"   # Hitachi
+  - "9432.T"   # NTT
+  - "4502.T"   # Takeda
+
+# Screening filters (pre-score)
+filters:
+  min_market_cap_jpy: 50_000_000_000  # 50B JPY (~$350M USD)
+  min_avg_volume: 100_000             # shares/day
+  exclude_sectors: []                  # e.g. ["Financial Services"]
+
+# Data settings
+data:
+  price_history_years: 5
+  fundamental_source: "yfinance"       # yfinance | fmp | manual
+  cache_dir: "data/cache"
+  currency: "JPY"
+  benchmark: "^N225"                   # Nikkei 225

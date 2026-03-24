@@ -1,0 +1,67 @@
+# Value Scoring Model Configuration
+# Weights must sum to 1.0 within each group
+# Higher score = more attractive value opportunity
+
+model:
+  name: "japan_deep_value_v1"
+  version: "1.0"
+
+# Factor weights (group level)
+group_weights:
+  value: 0.40
+  quality: 0.25
+  financial_strength: 0.20
+  momentum: 0.15
+
+# Value factors — the core of what makes something "cheap"
+value:
+  weights:
+    price_to_book: 0.25          # King metric for Japan
+    price_to_earnings: 0.20
+    price_to_fcf: 0.20
+    ev_to_ebitda: 0.15
+    dividend_yield: 0.10
+    cash_to_market_cap: 0.10     # Japan-specific: many cos sit on huge cash
+  thresholds:
+    price_to_book_max: 1.5       # P/B > 1.5 is expensive for Japan value
+    price_to_earnings_max: 15.0
+    ev_to_ebitda_max: 10.0
+    dividend_yield_min: 0.02     # 2% floor
+    cash_to_mcap_min: 0.20       # 20%+ cash/mcap is interesting
+
+# Quality factors — avoid value traps
+quality:
+  weights:
+    roe: 0.30
+    operating_margin: 0.25
+    earnings_stability: 0.25     # std dev of EPS over 5 years
+    revenue_growth_3y: 0.20
+  thresholds:
+    roe_min: 0.08                # 8% ROE minimum
+    margin_min: 0.05             # 5% operating margin
+
+# Financial strength — balance sheet durability
+financial_strength:
+  weights:
+    debt_to_equity: 0.30
+    current_ratio: 0.25
+    interest_coverage: 0.25
+    net_cash_positive: 0.20      # binary: net cash > 0
+  thresholds:
+    debt_to_equity_max: 1.0
+    current_ratio_min: 1.2
+
+# Momentum — avoid catching falling knives
+momentum:
+  weights:
+    relative_strength_6m: 0.40
+    price_vs_52w_high: 0.30
+    sma_50_vs_200: 0.30          # golden/death cross signal
+  thresholds:
+    max_drawdown_from_high: 0.40 # skip if down >40% from 52w high
+
+# Composite score settings
+scoring:
+  min_composite_score: 0.60      # minimum to be "investable"
+  top_n: 30                      # top N stocks to surface
+  rebalance_frequency: "quarterly"

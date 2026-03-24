@@ -1,0 +1,9 @@
+[project]
+name = "japan-quant"
+version = "1.0.0"
+description = "Multi-factor value quant model for Japanese equities"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
