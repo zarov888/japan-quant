@@ -2,6 +2,7 @@
 Japan equity universe management.
 Handles ticker lists, sector mappings, and universe filtering.
 """
+from __future__ import annotations
 
 import yaml
 from pathlib import Path

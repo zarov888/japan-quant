@@ -2,6 +2,7 @@
 Value scoring model for Japanese equities.
 Scores each stock across value, quality, financial strength, and momentum factors.
 """
+from __future__ import annotations
 
 import yaml
 import logging
@@ -172,7 +173,7 @@ def score_momentum(fund: dict, cfg: dict) -> tuple[float, dict]:
 
 def score_stock(fund: dict, cfg: dict) -> ScoreBreakdown:
     """Compute composite score for a single stock."""
-    gw = cfg["model"]["group_weights"]
+    gw = cfg["group_weights"]
 
     v_score, v_factors = score_value(fund, cfg)
     q_score, q_factors = score_quality(fund, cfg)

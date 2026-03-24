@@ -64,7 +64,10 @@ def main():
     # Summary stats
     print(f"\nScored: {len(results)} stocks")
     print(f"Above 0.60 threshold: {sum(1 for r in results if r.composite >= 0.60)}")
-    print(f"Top pick: {results[0].ticker} — {results[0].name} (score: {results[0].composite})")
+    if results:
+        print(f"Top pick: {results[0].ticker} — {results[0].name} (score: {results[0].composite})")
+    else:
+        print("No stocks scored.")
 
     # Show sector distribution of top 20
     top20 = df.head(20)
