@@ -755,30 +755,33 @@ with t_scr:
         for idx, ins in enumerate(_insights[:n_show]):
             col = insight_cols[idx % len(insight_cols)]
             icolor = insight_colors.get(ins["type"], GRAY)
-            icon = insight_icons.get(ins["type"], "?")
             tickers_str = ""
-            if ins.get("tickers"):
-                tickers_str = f'<div style="margin-top:4px;"><span style="color:{ORANGE};font-size:8px;letter-spacing:1px;">TICKERS: </span><span style="color:{WHITE};font-size:9px;">{", ".join(ins["tickers"][:6])}{"..." if len(ins["tickers"]) > 6 else ""}</span></div>'
-
-            col.markdown(f"""<div style="background:{BG2};border:1px solid {BORDER};border-left:3px solid {icolor};padding:10px;margin-bottom:6px;border-radius:2px;">
-                <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-                    <span style="color:{icolor};font-size:10px;font-weight:700;letter-spacing:1px;">[{ins["type"]}]</span>
-                    <span style="color:{WHITE};font-size:10px;font-weight:600;">{ins["title"]}</span>
-                </div>
-                <div style="color:{GRAY};font-size:9px;line-height:1.4;">{ins["detail"]}</div>
-                {tickers_str}
-            </div>""", unsafe_allow_html=True)
+            if ins.get("tickers") and len(ins["tickers"]) > 0:
+                t_list = ", ".join(ins["tickers"][:6])
+                if len(ins["tickers"]) > 6:
+                    t_list += "..."
+                tickers_str = f"<br><span style='color:{ORANGE};font-size:8px;'>TICKERS:</span> <span style='font-size:9px;'>{t_list}</span>"
+            card_html = (
+                f"<div style='background:{BG2};border:1px solid {BORDER};border-left:3px solid {icolor};"
+                f"padding:10px;margin-bottom:6px;border-radius:2px;'>"
+                f"<span style='color:{icolor};font-size:10px;font-weight:700;'>[{ins['type']}]</span> "
+                f"<span style='font-size:10px;font-weight:600;'>{ins['title']}</span><br>"
+                f"<span style='color:{GRAY};font-size:9px;'>{ins['detail']}</span>"
+                f"{tickers_str}</div>"
+            )
+            col.markdown(card_html, unsafe_allow_html=True)
 
         # Expandable full insights
         if len(_insights) > n_show:
             with st.expander(f"VIEW ALL {len(_insights)} INSIGHTS"):
                 for ins in _insights[n_show:]:
                     icolor = insight_colors.get(ins["type"], GRAY)
-                    st.markdown(f'<div style="padding:4px 0;border-bottom:1px solid {BORDER};">'
-                                f'<span style="color:{icolor};font-weight:600;">[{ins["type"]}]</span> '
-                                f'<span style="color:{WHITE};">{ins["title"]}</span> — '
-                                f'<span style="color:{GRAY};font-size:9px;">{ins["detail"][:200]}</span></div>',
-                                unsafe_allow_html=True)
+                    st.markdown(
+                        f"<span style='color:{icolor};font-weight:600;'>[{ins['type']}]</span> "
+                        f"{ins['title']} — "
+                        f"<span style='color:{GRAY};font-size:9px;'>{ins['detail'][:200]}</span>",
+                        unsafe_allow_html=True,
+                    )
 
     # ── TOP PICKS SUMMARY ────────────────────────────────────
     st.markdown(f'<div style="color:{ORANGE};font-size:11px;letter-spacing:2px;font-weight:600;margin:12px 0 6px;">TOP PICKS BY ALPHA</div>', unsafe_allow_html=True)
