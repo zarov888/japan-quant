@@ -29,7 +29,8 @@ from src.model.portfolio import optimize_portfolio, PortfolioConstraints, Portfo
 from src.model.walkforward import walk_forward_backtest, WalkForwardConfig
 from src.model.signals import (
     factor_rank_model, momentum_model, ml_ensemble_model,
-    blend_signals, ModelSignal, BlendedSignal,
+    mean_reversion_model, blend_signals, ModelSignal, BlendedSignal,
+    quintile_analysis, signal_diagnostics, build_returns_panel,
 )
 
 # ── Page ───────────────────────────────────────────────────────
@@ -517,26 +518,47 @@ loading.empty()
 
 # ── Run multi-model alpha ─────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
-def _compute_alpha(df_hash: str, df_json: str) -> dict:
-    """Run all three alpha models and blend."""
+def _compute_alpha(df_hash: str, df_json: str, w_rank: float = 0.40,
+                   w_mom: float = 0.20, w_ml: float = 0.20, w_rev: float = 0.20) -> dict:
+    """Run all four alpha models and blend."""
     import warnings
     warnings.filterwarnings("ignore")
     _df = pd.read_json(df_json)
 
-    sig_rank = factor_rank_model(_df)
-    sig_mom = momentum_model(_df)
-    sig_ml = ml_ensemble_model(_df, target_col="Composite")
-    blended = blend_signals([sig_rank, sig_mom, sig_ml])
+    # Build price history dict for momentum and mean-reversion models
+    tickers = _df["Ticker"].values if "Ticker" in _df.columns else _df.index.values
+    price_hist = {}
+    for t in tickers:
+        try:
+            ph = fetch_price_history(t, years=2, cache_dir="data/cache")
+            if ph is not None and not ph.empty:
+                price_hist[t] = ph
+        except Exception:
+            pass
 
+    sig_rank = factor_rank_model(_df)
+    sig_mom = momentum_model(_df, price_history=price_hist if price_hist else None)
+    sig_ml = ml_ensemble_model(_df, target_col="Composite")
+    sig_rev = mean_reversion_model(_df, price_history=price_hist if price_hist else None)
+
+    custom_weights = {
+        "FACTOR_RANK": w_rank,
+        "MOMENTUM": w_mom,
+        "ML_ENSEMBLE": w_ml,
+        "MEAN_REVERSION": w_rev,
+    }
+    blended = blend_signals([sig_rank, sig_mom, sig_ml, sig_rev], weights=custom_weights)
+
+    all_sigs = [sig_rank, sig_mom, sig_ml, sig_rev]
     return {
         "blended_alpha": blended.alpha.to_dict(),
         "signals": {
-            sig_rank.name: {"alpha": sig_rank.alpha.to_dict(), "coverage": sig_rank.coverage, "metadata": sig_rank.metadata},
-            sig_mom.name: {"alpha": sig_mom.alpha.to_dict(), "coverage": sig_mom.coverage, "metadata": sig_mom.metadata},
-            sig_ml.name: {"alpha": sig_ml.alpha.to_dict(), "coverage": sig_ml.coverage, "metadata": sig_ml.metadata},
+            s.name: {"alpha": s.alpha.to_dict(), "coverage": s.coverage, "metadata": s.metadata}
+            for s in all_sigs
         },
         "weights": blended.weights_used,
         "corr": blended.correlation_matrix.to_dict(),
+        "price_hist_count": len(price_hist),
     }
 
 # Hash for caching
@@ -2473,31 +2495,64 @@ with t_mdl:
     st.markdown("### MULTI-MODEL ALPHA SYSTEM")
     st.markdown(f"""<div class="panel"><div class="panel-title">SIGNAL GENERATION ENGINE</div>
     <span style="color:{GRAY};font-size:10px;">
-    Three independent alpha models blended into a single composite signal. Each model captures
-    different return drivers: fundamental value (rank model), price dynamics (momentum), and
-    nonlinear factor interactions (ML ensemble). The ALPHA column in SCREEN reflects this blended output.
+    Four independent alpha models blended into a single composite signal. Each model captures
+    different return drivers: fundamental value (rank model), price dynamics (momentum),
+    nonlinear factor interactions (ML ensemble), and short-term reversal (mean reversion).
+    The ALPHA column in SCREEN reflects this blended output.
     </span></div>""", unsafe_allow_html=True)
 
     alpha_out = _alpha_out
-    blended_alpha = pd.Series(alpha_out["blended_alpha"])
+    _mdl_blended = pd.Series(alpha_out["blended_alpha"])
     model_weights = alpha_out["weights"]
-    model_sigs = alpha_out["signals"]
+    model_sigs_mdl = alpha_out["signals"]
+    ph_count = alpha_out.get("price_hist_count", 0)
+
+    # ── Configurable Weights ──────────────────────────────────
+    st.markdown("### BLEND WEIGHTS")
+    st.markdown(f'<span style="color:{GRAY};font-size:9px;">Adjust model weights and click RECOMPUTE to re-blend. Weights auto-normalize to 100%.</span>', unsafe_allow_html=True)
+
+    wt_cols = st.columns(5)
+    with wt_cols[0]:
+        w_rank = st.slider("FACTOR RANK", 0, 100, 40, 5, key="mdl_w_rank")
+    with wt_cols[1]:
+        w_mom = st.slider("MOMENTUM", 0, 100, 20, 5, key="mdl_w_mom")
+    with wt_cols[2]:
+        w_ml = st.slider("ML ENSEMBLE", 0, 100, 20, 5, key="mdl_w_ml")
+    with wt_cols[3]:
+        w_rev = st.slider("MEAN REVERSION", 0, 100, 20, 5, key="mdl_w_rev")
+    with wt_cols[4]:
+        st.markdown("<br>", unsafe_allow_html=True)
+        recompute = st.button("RECOMPUTE", key="mdl_recompute")
+
+    if recompute:
+        total_w = w_rank + w_mom + w_ml + w_rev
+        if total_w > 0:
+            alpha_out = _compute_alpha(
+                _df_hash, df.to_json(),
+                w_rank=w_rank / total_w, w_mom=w_mom / total_w,
+                w_ml=w_ml / total_w, w_rev=w_rev / total_w,
+            )
+            _mdl_blended = pd.Series(alpha_out["blended_alpha"])
+            model_weights = alpha_out["weights"]
+            model_sigs_mdl = alpha_out["signals"]
+            st.success(f"Recomputed with weights: {w_rank}/{w_mom}/{w_ml}/{w_rev} (normalized)")
 
     # Summary metrics
-    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+    mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
     mc1.metric("UNIVERSE", len(df))
-    mc2.metric("MODELS", len(model_sigs))
-    n_active = sum(1 for s in model_sigs.values() if s["coverage"] > 0.1)
+    mc2.metric("MODELS", len(model_sigs_mdl))
+    n_active = sum(1 for s in model_sigs_mdl.values() if s["coverage"] > 0.1)
     mc3.metric("ACTIVE", n_active)
     mc4.metric("BLEND", " / ".join(f"{int(w*100)}%" for w in model_weights.values()))
-    mc5.metric("ALPHA SPREAD", f"{blended_alpha.quantile(0.9) - blended_alpha.quantile(0.1):.2f}")
+    mc5.metric("ALPHA SPREAD", f"{_mdl_blended.quantile(0.9) - _mdl_blended.quantile(0.1):.2f}")
+    mc6.metric("PRICE DATA", f"{ph_count} stocks")
 
     # ── Per-model breakdown ───────────────────────────────────
     st.markdown("### MODEL BREAKDOWN")
 
-    model_colors = {"FACTOR_RANK": ORANGE, "MOMENTUM": "#6699ff", "ML_ENSEMBLE": GREEN}
+    model_colors = {"FACTOR_RANK": ORANGE, "MOMENTUM": "#6699ff", "ML_ENSEMBLE": GREEN, "MEAN_REVERSION": "#cc66ff"}
 
-    for mname, mdata in model_sigs.items():
+    for mname, mdata in model_sigs_mdl.items():
         color = model_colors.get(mname, GRAY)
         weight_pct = model_weights.get(mname, 0) * 100
         cov = mdata["coverage"] * 100
@@ -2512,13 +2567,13 @@ with t_mdl:
             <span style="color:{GRAY};font-size:9px;">COVERAGE: {cov:.0f}%</span>
             <span style="color:{GRAY};font-size:9px;">|</span>
             <span style="color:{GRAY};font-size:9px;">METHOD: {meta.get("method","--")}</span>
+            {"" if "components" not in meta else f'<span style="color:{GRAY};font-size:9px;">| COMPONENTS: {", ".join(meta["components"])}</span>'}
         </div>
         </div>""", unsafe_allow_html=True)
 
         m_left, m_right = st.columns([1, 1])
 
         with m_left:
-            # Alpha distribution for this model
             fig_m = go.Figure()
             fig_m.add_trace(go.Histogram(
                 x=alpha_s.values, nbinsx=35,
@@ -2529,7 +2584,6 @@ with t_mdl:
             st.plotly_chart(fig_m, use_container_width=True)
 
         with m_right:
-            # Top picks from this model
             top_picks = alpha_s.sort_values(ascending=False).head(10)
             tp_df = pd.DataFrame({"TICKER": top_picks.index, "ALPHA": top_picks.values.round(4), "#": range(1, len(top_picks)+1)})
             st.dataframe(tp_df, use_container_width=True, hide_index=True, height=220)
@@ -2571,29 +2625,108 @@ with t_mdl:
         fig_corr.update_layout(**chart_layout(300, title="INTER-MODEL CORRELATIONS"))
         st.plotly_chart(fig_corr, use_container_width=True)
 
+    # ── Quintile Analysis ─────────────────────────────────────
+    st.markdown("### QUINTILE ANALYSIS")
+    st.markdown(f'<span style="color:{GRAY};font-size:10px;">A good alpha signal shows monotonic increase in composite score from Q1 (worst alpha) to Q5 (best alpha). '
+                 f'High Q5-Q1 spread indicates strong discriminative power.</span>', unsafe_allow_html=True)
+
+    qa_tabs = st.columns(len(model_sigs_mdl) + 1)
+    qa_names = list(model_sigs_mdl.keys()) + ["BLENDED"]
+    qa_alphas = [pd.Series(model_sigs_mdl[n]["alpha"]) for n in model_sigs_mdl] + [_mdl_blended]
+    qa_colors_list = [model_colors.get(n, GRAY) for n in model_sigs_mdl] + [ORANGE]
+
+    for qi, (qa_col, qa_name, qa_alpha, qa_color) in enumerate(zip(qa_tabs, qa_names, qa_alphas, qa_colors_list)):
+        with qa_col:
+            qa_result = quintile_analysis(qa_alpha, df)
+            if "error" not in qa_result:
+                q_labels = ["Q1", "Q2", "Q3", "Q4", "Q5"]
+                q_scores = [qa_result[q]["avg_metric"] for q in q_labels]
+                q_counts = [qa_result[q]["count"] for q in q_labels]
+                fig_qa = go.Figure()
+                fig_qa.add_trace(go.Bar(
+                    x=q_labels, y=q_scores,
+                    marker_color=[RED, ORANGE_DIM, YELLOW, GREEN, qa_color],
+                    text=[f"{v:.1f}" for v in q_scores],
+                    textposition="outside", textfont=dict(size=8, color=WHITE),
+                ))
+                mono_str = f"MONO: {qa_result['monotonicity']:.0%}"
+                spread_str = f"SPREAD: {qa_result['q5_q1_spread']:.2f}"
+                fig_qa.update_layout(**chart_layout(200, title=f"{qa_name[:10]} ({mono_str} | {spread_str})",
+                    yaxis=dict(title="AVG SCORE")))
+                st.plotly_chart(fig_qa, use_container_width=True)
+
+    # ── Signal Diagnostics ────────────────────────────────────
+    st.markdown("### SIGNAL DIAGNOSTICS")
+
+    diag = signal_diagnostics(_mdl_blended, df)
+    diag_cols = st.columns(6)
+    diag_items = [
+        ("COVERAGE", f"{diag.get('coverage', 0)*100:.0f}%"),
+        ("SKEW", f"{diag.get('skew', 0):.2f}"),
+        ("KURTOSIS", f"{diag.get('kurtosis', 0):.2f}"),
+        ("% POSITIVE", f"{diag.get('pct_positive', 0):.0f}%"),
+        ("90-10 SPREAD", f"{diag.get('spread_90_10', 0):.2f}"),
+        ("IC vs SCORE", f"{diag.get('ic_vs_composite', 0):.3f}"),
+    ]
+    for di, (dlabel, dval) in enumerate(diag_items):
+        diag_cols[di].metric(dlabel, dval)
+
+    # Distribution statistics table
+    diag_left, diag_right = st.columns(2)
+    with diag_left:
+        st.markdown(f'<div style="color:{ORANGE};font-size:10px;letter-spacing:1px;margin:8px 0 4px;">BLENDED ALPHA DISTRIBUTION</div>', unsafe_allow_html=True)
+        dist_data = {
+            "STATISTIC": ["Mean", "Std Dev", "Skewness", "Kurtosis", "Q10", "Q25", "Median", "Q75", "Q90"],
+            "VALUE": [diag.get(k, 0) for k in ["mean", "std", "skew", "kurtosis", "q10", "q25", "median", "q75", "q90"]],
+        }
+        st.dataframe(pd.DataFrame(dist_data), use_container_width=True, hide_index=True, height=300)
+
+    with diag_right:
+        # Scatter: blended alpha vs composite score
+        if "Composite" in df.columns and "Ticker" in df.columns:
+            scatter_df = pd.DataFrame({
+                "Alpha": _mdl_blended.reindex(df["Ticker"]).values,
+                "Score": df["Composite"].values,
+                "Ticker": df["Ticker"].values,
+            }).dropna()
+            if len(scatter_df) > 5:
+                fig_sc = go.Figure()
+                fig_sc.add_trace(go.Scatter(
+                    x=scatter_df["Alpha"], y=scatter_df["Score"],
+                    mode="markers", marker=dict(size=4, color=ORANGE, opacity=0.6),
+                    text=scatter_df["Ticker"], hovertemplate="%{text}<br>Alpha: %{x:.3f}<br>Score: %{y:.1f}",
+                ))
+                # Trend line
+                z = np.polyfit(scatter_df["Alpha"], scatter_df["Score"], 1)
+                p = np.poly1d(z)
+                x_range = np.linspace(scatter_df["Alpha"].min(), scatter_df["Alpha"].max(), 50)
+                fig_sc.add_trace(go.Scatter(
+                    x=x_range, y=p(x_range),
+                    mode="lines", line=dict(color=GREEN, width=1, dash="dash"), name="FIT",
+                ))
+                fig_sc.update_layout(**chart_layout(300, title="ALPHA vs COMPOSITE SCORE",
+                    xaxis=dict(title="BLENDED ALPHA"), yaxis=dict(title="COMPOSITE SCORE")))
+                st.plotly_chart(fig_sc, use_container_width=True)
+
     # ── Blended Alpha Output ──────────────────────────────────
     st.markdown("### BLENDED ALPHA — TOP 25")
 
-    alpha_sorted = blended_alpha.sort_values(ascending=False)
+    alpha_sorted = _mdl_blended.sort_values(ascending=False)
     top_n = min(25, len(alpha_sorted))
     blend_df = pd.DataFrame({
         "#": range(1, top_n + 1),
         "TICKER": alpha_sorted.head(top_n).index,
         "ALPHA": alpha_sorted.head(top_n).values.round(4),
     })
-    # Add individual model alphas for comparison
-    for mname, mdata in model_sigs.items():
+    for mname, mdata in model_sigs_mdl.items():
         ms = pd.Series(mdata["alpha"])
         blend_df[mname.replace("_"," ")[:8]] = blend_df["TICKER"].map(ms).round(3)
 
-    st.dataframe(blend_df, use_container_width=True, hide_index=True,
-                 column_config={
-                     "#": st.column_config.NumberColumn("RANK", help="Blended alpha rank"),
-                     "ALPHA": st.column_config.NumberColumn("BLENDED", help="Final blended z-scored alpha", format="%.4f"),
-                     "FACTOR R": st.column_config.NumberColumn("RANK MDL", help="Factor rank model alpha"),
-                     "MOMENTUM": st.column_config.NumberColumn("MOM MDL", help="Momentum model alpha"),
-                     "ML ENSEM": st.column_config.NumberColumn("ML MDL", help="ML ensemble model alpha"),
-                 })
+    col_cfg = {
+        "#": st.column_config.NumberColumn("RANK", help="Blended alpha rank"),
+        "ALPHA": st.column_config.NumberColumn("BLENDED", help="Final blended z-scored alpha", format="%.4f"),
+    }
+    st.dataframe(blend_df, use_container_width=True, hide_index=True, column_config=col_cfg)
 
     # ── Portfolio Construction ────────────────────────────────
     st.markdown("### OPTIMIZED PORTFOLIO")
@@ -2601,22 +2734,31 @@ with t_mdl:
                  f'Ledoit-Wolf shrinkage covariance. Long-only, 5% max position, 25% max sector.</span>',
                  unsafe_allow_html=True)
 
+    # Build returns panel for covariance estimation
+    _ret_panel = build_returns_panel(
+        _mdl_blended.nlargest(50).index.tolist(),
+        lambda t: fetch_price_history(t, years=2, cache_dir="data/cache"),
+        months=12,
+    )
+
     sectors_map = pd.Series(dict(zip(df["Ticker"], df["Sector"]))) if "Sector" in df.columns else None
     port_result = optimize_portfolio(
-        alpha=blended_alpha,
+        alpha=_mdl_blended,
+        returns_panel=_ret_panel if not _ret_panel.empty else None,
         sectors=sectors_map,
         constraints=PortfolioConstraints(max_position=0.05, max_names=30, min_names=10, max_sector_weight=0.25),
     )
 
     if port_result.n_holdings > 0:
-        pc1, pc2, pc3, pc4, pc5 = st.columns(5)
+        pc1, pc2, pc3, pc4, pc5, pc6 = st.columns(6)
         pc1.metric("HOLDINGS", port_result.n_holdings)
         pc2.metric("EX-ANTE SHARPE", f"{port_result.sharpe_ratio:.3f}")
         pc3.metric("ACTIVE RISK", f"{port_result.active_risk*100:.2f}%")
         pc4.metric("TOP WEIGHT", f"{port_result.weights.max()*100:.1f}%")
         pc5.metric("TURNOVER", f"{port_result.turnover*100:.0f}%")
+        pc6.metric("COV MATRIX", "REAL" if not _ret_panel.empty else "IDENTITY")
 
-        pl, pr = st.columns(2)
+        pl, pr_ = st.columns(2)
         with pl:
             pw = port_result.weights.head(20)
             fig_pw = go.Figure()
@@ -2630,7 +2772,7 @@ with t_mdl:
                 xaxis=dict(tickangle=-45, tickfont=dict(size=8)), yaxis=dict(title="WEIGHT %")))
             st.plotly_chart(fig_pw, use_container_width=True)
 
-        with pr:
+        with pr_:
             if port_result.sector_weights:
                 sects = port_result.sector_weights
                 fig_sect = go.Figure(data=[go.Pie(
@@ -2649,23 +2791,28 @@ with t_mdl:
     st.markdown(f"""<div class="panel">
     <div class="panel-title">MULTI-MODEL ARCHITECTURE</div>
     <span style="color:{GRAY};font-size:10px;">
-    <b style="color:{ORANGE};">MODEL 1: FACTOR RANK (50%)</b> — Cross-sectional percentile ranking on 13 fundamental factors
+    <b style="color:{ORANGE};">MODEL 1: FACTOR RANK (40%)</b> — Cross-sectional percentile ranking on 13 fundamental factors
     across value, leverage, quality, and momentum groups. Each factor is rank-normalized to [0,1],
     directionally adjusted (lower P/E = higher rank), and combined via weighted sum. Works on a single
     snapshot with no estimation history required.<br><br>
-    <b style="color:{ORANGE};">MODEL 2: MOMENTUM (25%)</b> — Price-derived signals: 12-1 month momentum (skip last month
+    <b style="color:{ORANGE};">MODEL 2: MOMENTUM (20%)</b> — Price-derived signals: 12-1 month momentum (skip last month
     for short-term reversal), 52-week relative position, 50/200 SMA crossover, low beta premium,
-    and idiosyncratic volatility (low vol = higher signal). Captures price dynamics that fundamentals miss.<br><br>
-    <b style="color:{ORANGE};">MODEL 3: ML ENSEMBLE (25%)</b> — Gradient-boosted decision tree (100 trees, depth 3, lr 0.05)
+    and idiosyncratic volatility (low vol = higher signal). Now uses actual yfinance price history
+    for richer signals.<br><br>
+    <b style="color:{ORANGE};">MODEL 3: ML ENSEMBLE (20%)</b> — Gradient-boosted decision tree (100 trees, depth 3, lr 0.05)
     trained on all 20 fundamental features predicting composite score rank. 5-fold cross-validated
-    predictions ensure each stock's alpha is out-of-sample. Captures nonlinear factor interactions
-    (e.g., cheap + leveraged + improving margins = strong conviction).<br><br>
-    <b style="color:{ORANGE};">BLENDING</b> — Individual model alphas are z-scored and combined: 50% Factor Rank,
-    25% Momentum, 25% ML Ensemble. Final blend is re-z-scored. Low inter-model correlation
-    provides diversified alpha sources.<br><br>
+    predictions ensure each stock's alpha is out-of-sample. Captures nonlinear factor interactions.<br><br>
+    <b style="color:{ORANGE};">MODEL 4: MEAN REVERSION (20%)</b> — Short-term reversal signals tuned for Japan equities:
+    1-month price reversal, RSI contrarian (buy oversold), distance from 200-day MA, 52-week
+    contrarian (buy near lows), and capitulation detection (high volume on down-moves). Japan shows
+    strong mean-reversion at short horizons (Asness et al., 2013).<br><br>
+    <b style="color:{ORANGE};">BLENDING</b> — Individual model alphas are z-scored and combined with configurable weights.
+    Default: 40/20/20/20. Final blend is re-z-scored. Low inter-model correlation provides
+    diversified alpha sources. Weights can be adjusted in the MODEL tab above.<br><br>
     <b style="color:{ORANGE};">PORTFOLIO</b> — Mean-variance optimization with Ledoit-Wolf constant-correlation shrinkage
-    covariance. SLSQP solver maximizes alpha exposure minus risk penalty minus turnover cost.
-    Constraints: 5% single name, 25% sector, 30 max holdings. Sector-neutral rebalancing available.
+    covariance estimated from actual daily returns (12-month window). SLSQP solver maximizes
+    alpha exposure minus risk penalty minus turnover cost. Constraints: 5% single name, 25% sector,
+    30 max holdings.
     </span></div>""", unsafe_allow_html=True)
 
 

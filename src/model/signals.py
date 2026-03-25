@@ -375,6 +375,252 @@ def ml_ensemble_model(
     )
 
 
+# ── Model 4: Mean Reversion ───────────────────────────────────
+
+def mean_reversion_model(
+    df: pd.DataFrame,
+    price_history: dict[str, pd.DataFrame] = None,
+) -> ModelSignal:
+    """
+    Short-term mean reversion signals — Japan equities exhibit strong
+    reversal at 1-month and 1-week horizons (Asness, 2013).
+
+    Components:
+    - 1-month reversal: stocks that dropped last month tend to bounce
+    - Distance from 200-day MA: oversold names revert up
+    - RSI contrarian: low RSI = oversold = buy signal
+    - Volume spike: high recent volume on a down-move = capitulation
+    """
+    tickers = df["Ticker"].values if "Ticker" in df.columns else df.index.values
+    n = len(df)
+    components = {}
+
+    # Distance from 200-day MA (from existing columns)
+    if "current_price" in df.columns and "two_hundred_day_avg" in df.columns:
+        price = df["current_price"].astype(float)
+        ma200 = df["two_hundred_day_avg"].astype(float)
+        valid = price.notna() & ma200.notna() & (ma200 > 0)
+        dist = pd.Series(np.nan, index=df.index)
+        dist[valid] = (price[valid] / ma200[valid]) - 1
+        # Invert: more oversold (negative distance) = higher score
+        dist_rank = (-dist).rank(pct=True, na_option="keep").fillna(0.5)
+        components["ma200_reversion"] = dist_rank.values
+
+    # 52w position inverted: stocks near 52w lows tend to mean-revert
+    if "52w_pos" in df.columns:
+        pos = df["52w_pos"].astype(float)
+        inv_rank = (1 - pos.rank(pct=True, na_option="keep")).fillna(0.5)
+        components["52w_contrarian"] = inv_rank.values
+
+    # Price-derived short-term reversal from history
+    if price_history:
+        rev_1m = []
+        rsi_vals = []
+        vol_spike = []
+        for t in tickers:
+            ph = price_history.get(t)
+            if ph is not None and not ph.empty:
+                close = _get_close(ph)
+                if close is not None and len(close) > 21:
+                    # 1-month reversal (last 21 trading days return, inverted)
+                    ret_1m = close.iloc[-1] / close.iloc[-21] - 1
+                    rev_1m.append(-ret_1m)  # losers become winners
+
+                    # RSI (14-day)
+                    delta = close.diff().tail(14)
+                    gain = delta.clip(lower=0).mean()
+                    loss = (-delta.clip(upper=0)).mean()
+                    rs = gain / loss if loss > 0 else 100
+                    rsi = 100 - (100 / (1 + rs))
+                    rsi_vals.append(100 - rsi)  # Invert: low RSI = high score
+
+                    # Volume spike on down-move (capitulation indicator)
+                    if "Volume" in ph.columns and len(ph) > 21:
+                        vol_recent = ph["Volume"].tail(5).mean()
+                        vol_avg = ph["Volume"].tail(63).mean()
+                        is_down = ret_1m < 0
+                        spike = (vol_recent / vol_avg - 1) if vol_avg > 0 else 0
+                        vol_spike.append(spike if is_down else 0)
+                    else:
+                        vol_spike.append(np.nan)
+                else:
+                    rev_1m.append(np.nan)
+                    rsi_vals.append(np.nan)
+                    vol_spike.append(np.nan)
+            else:
+                rev_1m.append(np.nan)
+                rsi_vals.append(np.nan)
+                vol_spike.append(np.nan)
+
+        rev_s = pd.Series(rev_1m).rank(pct=True, na_option="keep").fillna(0.5)
+        components["reversal_1m"] = rev_s.values
+
+        rsi_s = pd.Series(rsi_vals).rank(pct=True, na_option="keep").fillna(0.5)
+        components["rsi_contrarian"] = rsi_s.values
+
+        vol_s = pd.Series(vol_spike).rank(pct=True, na_option="keep").fillna(0.5)
+        components["capitulation"] = vol_s.values
+
+    if not components:
+        return ModelSignal(
+            name="MEAN_REVERSION",
+            alpha=pd.Series(0.0, index=tickers),
+            coverage=0.0,
+            metadata={"error": "no_reversion_data"},
+        )
+
+    weights = {
+        "reversal_1m": 0.30,
+        "rsi_contrarian": 0.20,
+        "ma200_reversion": 0.20,
+        "52w_contrarian": 0.15,
+        "capitulation": 0.15,
+    }
+
+    alpha = np.zeros(n)
+    tw = 0
+    for comp, w in weights.items():
+        if comp in components:
+            alpha += components[comp] * w
+            tw += w
+    if tw > 0:
+        alpha /= tw
+
+    mu = np.nanmean(alpha)
+    sigma = np.nanstd(alpha)
+    if sigma > 0:
+        alpha = (alpha - mu) / sigma
+
+    alpha_series = pd.Series(alpha, index=tickers)
+    coverage = (pd.notna(alpha_series) & (alpha_series != 0)).mean()
+
+    return ModelSignal(
+        name="MEAN_REVERSION",
+        alpha=alpha_series,
+        coverage=round(coverage, 3),
+        metadata={
+            "n_components": len(components),
+            "components": list(components.keys()),
+            "method": "short_term_mean_reversion",
+        },
+    )
+
+
+# ── Signal Quality Diagnostics ────────────────────────────────
+
+def quintile_analysis(
+    alpha: pd.Series,
+    df: pd.DataFrame,
+    metric_col: str = "Composite",
+) -> dict:
+    """
+    Analyze alpha signal quality by quintile.
+
+    Splits universe into 5 quintiles by alpha, then reports average
+    score/metric per quintile. A good signal should show monotonic
+    increase from Q1 (worst) to Q5 (best).
+    """
+    merged = pd.DataFrame({
+        "alpha": alpha,
+        "metric": df.set_index("Ticker")[metric_col] if "Ticker" in df.columns else df[metric_col],
+    }).dropna()
+
+    if len(merged) < 10:
+        return {"error": "insufficient_data"}
+
+    merged["quintile"] = pd.qcut(merged["alpha"], 5, labels=["Q1", "Q2", "Q3", "Q4", "Q5"])
+
+    result = {}
+    for q in ["Q1", "Q2", "Q3", "Q4", "Q5"]:
+        qdata = merged[merged["quintile"] == q]
+        result[q] = {
+            "count": len(qdata),
+            "avg_alpha": round(qdata["alpha"].mean(), 4),
+            "avg_metric": round(qdata["metric"].mean(), 4),
+            "min_alpha": round(qdata["alpha"].min(), 4),
+            "max_alpha": round(qdata["alpha"].max(), 4),
+        }
+
+    # Monotonicity score: how well does alpha predict the metric?
+    q_means = [result[q]["avg_metric"] for q in ["Q1", "Q2", "Q3", "Q4", "Q5"]]
+    monotonic = sum(1 for i in range(4) if q_means[i] < q_means[i + 1]) / 4
+    result["monotonicity"] = round(monotonic, 2)
+    result["q5_q1_spread"] = round(q_means[4] - q_means[0], 4)
+
+    return result
+
+
+def signal_diagnostics(
+    alpha: pd.Series,
+    df: pd.DataFrame,
+) -> dict:
+    """
+    Comprehensive signal quality diagnostics.
+    """
+    tickers = df["Ticker"].values if "Ticker" in df.columns else df.index.values
+    aligned = alpha.reindex(tickers).fillna(0)
+
+    diag = {
+        "n_stocks": len(aligned),
+        "coverage": round((aligned != 0).mean(), 3),
+        "mean": round(aligned.mean(), 4),
+        "std": round(aligned.std(), 4),
+        "skew": round(aligned.skew(), 3),
+        "kurtosis": round(aligned.kurtosis(), 3),
+        "pct_positive": round((aligned > 0).mean() * 100, 1),
+        "q10": round(aligned.quantile(0.1), 4),
+        "q25": round(aligned.quantile(0.25), 4),
+        "median": round(aligned.median(), 4),
+        "q75": round(aligned.quantile(0.75), 4),
+        "q90": round(aligned.quantile(0.9), 4),
+        "spread_90_10": round(aligned.quantile(0.9) - aligned.quantile(0.1), 4),
+    }
+
+    # IC with composite score if available
+    if "Composite" in df.columns:
+        from scipy import stats as sp_stats
+        comp = df.set_index("Ticker")["Composite"] if "Ticker" in df.columns else df["Composite"]
+        common = aligned.index.intersection(comp.index)
+        if len(common) > 10:
+            ic, p_val = sp_stats.spearmanr(aligned[common], comp[common])
+            diag["ic_vs_composite"] = round(ic, 4)
+            diag["ic_pval"] = round(p_val, 4)
+
+    return diag
+
+
+def build_returns_panel(
+    tickers: list[str],
+    price_loader,
+    months: int = 12,
+) -> pd.DataFrame:
+    """
+    Build a returns panel from price history for covariance estimation.
+
+    tickers: list of ticker symbols
+    price_loader: callable(ticker) -> price DataFrame
+    months: how many months of daily returns to include
+    """
+    returns_dict = {}
+    for t in tickers:
+        try:
+            ph = price_loader(t)
+            if ph is not None and not ph.empty:
+                close = _get_close(ph)
+                if close is not None and len(close) > 21:
+                    daily_ret = close.pct_change().dropna().tail(months * 21)
+                    returns_dict[t] = daily_ret
+        except Exception:
+            continue
+
+    if not returns_dict:
+        return pd.DataFrame()
+
+    panel = pd.DataFrame(returns_dict)
+    panel = panel.fillna(0)
+    return panel
+
+
 # ── Signal Blender ─────────────────────────────────────────────
 
 def blend_signals(
@@ -384,13 +630,14 @@ def blend_signals(
     """
     Blend multiple model signals into a single composite alpha.
 
-    Default weights: FACTOR_RANK 0.50, MOMENTUM 0.25, ML_ENSEMBLE 0.25
+    Default weights: FACTOR_RANK 0.40, MOMENTUM 0.20, ML_ENSEMBLE 0.20, MEAN_REVERSION 0.20
     """
     if weights is None:
         weights = {
-            "FACTOR_RANK": 0.50,
-            "MOMENTUM": 0.25,
-            "ML_ENSEMBLE": 0.25,
+            "FACTOR_RANK": 0.40,
+            "MOMENTUM": 0.20,
+            "ML_ENSEMBLE": 0.20,
+            "MEAN_REVERSION": 0.20,
         }
 
     # Normalize weights to sum to 1
