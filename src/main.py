@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    logger.info("Japan Value Quant Model v1.0")
-    logger.info("=" * 50)
+    logger.info("Japan Leveraged Small Value Model v2.0 (Verdad Framework)")
+    logger.info("=" * 60)
 
     # Load universe config
     config = load_universe("config/universe.yaml")
@@ -46,33 +46,38 @@ def main():
     # Output results
     df = results_to_dataframe(results)
 
-    print("\n" + "=" * 80)
-    print("TOP VALUE PICKS — JAPAN EQUITIES")
-    print("=" * 80)
+    print("\n" + "=" * 90)
+    print("LEVERAGED SMALL VALUE SCREEN — JAPAN EQUITIES (VERDAD FRAMEWORK)")
+    print("=" * 90)
     print(df.head(30).to_string(index=False))
-    print("=" * 80)
+    print("=" * 90)
 
     # Export
     output_dir = Path("data/output")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
-    csv_path = output_dir / f"japan_value_screen_{timestamp}.csv"
+    csv_path = output_dir / f"japan_lsv_screen_{timestamp}.csv"
     df.to_csv(csv_path, index=False)
     logger.info(f"Results exported to {csv_path}")
 
     # Summary stats
+    passed = [r for r in results if r.passed_primary and r.passed_bankruptcy]
     print(f"\nScored: {len(results)} stocks")
-    print(f"Above 0.60 threshold: {sum(1 for r in results if r.composite >= 0.60)}")
+    print(f"Passed all screens: {len(passed)}")
+    print(f"Above 0.55 threshold: {sum(1 for r in results if r.composite >= 0.55)}")
     if results:
-        print(f"Top pick: {results[0].ticker} — {results[0].name} (score: {results[0].composite})")
+        top = results[0]
+        flag = "PASS" if (top.passed_primary and top.passed_bankruptcy) else "FAIL"
+        print(f"Top pick: {top.ticker} — {top.name} (score: {top.composite}) [{flag}]")
     else:
         print("No stocks scored.")
 
-    # Show sector distribution of top 20
-    top20 = df.head(20)
-    print(f"\nTop 20 Sector Distribution:")
-    print(top20["Sector"].value_counts().to_string())
+    # Show sector distribution of passed stocks
+    passed_df = df[df["Screen"] == "PASS"].head(20)
+    if not passed_df.empty:
+        print(f"\nTop 20 Screened — Sector Distribution:")
+        print(passed_df["Sector"].value_counts().to_string())
 
     return results
 

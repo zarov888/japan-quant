@@ -19,6 +19,14 @@ logger = logging.getLogger(__name__)
 CACHE_EXPIRY_HOURS = 12
 
 
+def _to_decimal(val):
+    """Normalize yfinance yield/pct fields that sometimes come as whole numbers (2.92 = 2.92%)."""
+    if val is None:
+        return None
+    # If > 1, it's already a percentage — convert to decimal
+    return val / 100.0 if val > 1.0 else val
+
+
 def _cache_path(cache_dir: str, ticker: str, kind: str) -> Path:
     """Generate cache file path for a ticker."""
     safe_name = ticker.replace(".", "_")
@@ -100,7 +108,7 @@ def fetch_fundamentals(
             "pb_ratio": info.get("priceToBook"),
             "price_to_sales": info.get("priceToSalesTrailing12Months"),
             "ev_to_ebitda": info.get("enterpriseToEbitda"),
-            "dividend_yield": info.get("dividendYield"),
+            "dividend_yield": _to_decimal(info.get("dividendYield")),
             # Quality metrics
             "roe": info.get("returnOnEquity"),
             "roa": info.get("returnOnAssets"),
@@ -115,6 +123,16 @@ def fetch_fundamentals(
             "total_debt": info.get("totalDebt"),
             "free_cashflow": info.get("freeCashflow"),
             "enterprise_value": info.get("enterpriseValue"),
+            # Verdad leveraged value metrics
+            "ebitda": info.get("ebitda"),
+            "total_revenue": info.get("totalRevenue"),
+            "total_assets": info.get("totalAssets"),
+            "gross_profits": info.get("grossProfits"),
+            "long_term_debt": info.get("longTermDebt"),
+            "short_ratio": info.get("shortRatio"),
+            "short_pct_float": info.get("shortPercentOfFloat"),
+            "net_income": info.get("netIncomeToCommon"),
+            "operating_cashflow": info.get("operatingCashflow"),
             # Price data
             "current_price": info.get("currentPrice") or info.get("regularMarketPrice"),
             "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
@@ -127,13 +145,45 @@ def fetch_fundamentals(
             "fetched_at": datetime.now().isoformat(),
         }
 
-        # Compute cash-to-market-cap ratio (Japan-specific importance)
-        if fundamentals["total_cash"] and fundamentals["market_cap"]:
-            fundamentals["cash_to_mcap"] = (
-                fundamentals["total_cash"] / fundamentals["market_cap"]
-            )
-        else:
-            fundamentals["cash_to_mcap"] = None
+        # Derived ratios — Verdad framework
+        ev = fundamentals["enterprise_value"]
+        mcap = fundamentals["market_cap"]
+        lt_debt = fundamentals["long_term_debt"]
+        ebitda = fundamentals["ebitda"]
+        assets = fundamentals["total_assets"]
+        revenue = fundamentals["total_revenue"]
+        gross = fundamentals["gross_profits"]
+
+        # LT Debt / EV (leverage intensity)
+        fundamentals["lt_debt_to_ev"] = (
+            lt_debt / ev if lt_debt and ev and ev > 0 else None
+        )
+        # Net Debt / EBITDA
+        net_debt = (fundamentals["total_debt"] or 0) - (fundamentals["total_cash"] or 0)
+        fundamentals["net_debt_to_ebitda"] = (
+            net_debt / ebitda if ebitda and ebitda > 0 else None
+        )
+        # EBITDA / EV (earnings yield on enterprise)
+        fundamentals["ebitda_to_ev"] = (
+            ebitda / ev if ebitda and ev and ev > 0 else None
+        )
+        # Gross Profit / Assets (capital efficiency)
+        fundamentals["gross_profit_to_assets"] = (
+            gross / assets if gross and assets and assets > 0 else None
+        )
+        # LT Debt / Assets
+        fundamentals["lt_debt_to_assets"] = (
+            lt_debt / assets if lt_debt and assets and assets > 0 else None
+        )
+        # Asset Turnover (Revenue / Assets)
+        fundamentals["asset_turnover"] = (
+            revenue / assets if revenue and assets and assets > 0 else None
+        )
+        # Cash-to-market-cap ratio (Japan-specific)
+        fundamentals["cash_to_mcap"] = (
+            fundamentals["total_cash"] / mcap
+            if fundamentals["total_cash"] and mcap and mcap > 0 else None
+        )
 
         Path(cache_dir).mkdir(parents=True, exist_ok=True)
         with open(json_cache, "w") as f:
