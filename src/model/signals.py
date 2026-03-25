@@ -436,8 +436,8 @@ def mean_reversion_model(
 
                     # Volume spike on down-move (capitulation indicator)
                     if "Volume" in ph.columns and len(ph) > 21:
-                        vol_recent = ph["Volume"].tail(5).mean()
-                        vol_avg = ph["Volume"].tail(63).mean()
+                        vol_recent = float(ph["Volume"].tail(5).mean())
+                        vol_avg = float(ph["Volume"].tail(63).mean())
                         is_down = ret_1m < 0
                         spike = (vol_recent / vol_avg - 1) if vol_avg > 0 else 0
                         vol_spike.append(spike if is_down else 0)

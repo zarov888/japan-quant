@@ -525,10 +525,14 @@ def _compute_alpha(df_hash: str, df_json: str, w_rank: float = 0.40,
     warnings.filterwarnings("ignore")
     _df = pd.read_json(df_json)
 
-    # Build price history dict for momentum and mean-reversion models
+    # Build price history dict — limit to top 50 by Composite to avoid timeout
     tickers = _df["Ticker"].values if "Ticker" in _df.columns else _df.index.values
     price_hist = {}
-    for t in tickers:
+    if "Composite" in _df.columns:
+        top_tickers = _df.nlargest(50, "Composite")["Ticker"].values
+    else:
+        top_tickers = tickers[:50]
+    for t in top_tickers:
         try:
             ph = fetch_price_history(t, years=2, cache_dir="data/cache")
             if ph is not None and not ph.empty:
@@ -2734,29 +2738,20 @@ with t_mdl:
                  f'Ledoit-Wolf shrinkage covariance. Long-only, 5% max position, 25% max sector.</span>',
                  unsafe_allow_html=True)
 
-    # Build returns panel for covariance estimation
-    _ret_panel = build_returns_panel(
-        _mdl_blended.nlargest(50).index.tolist(),
-        lambda t: fetch_price_history(t, years=2, cache_dir="data/cache"),
-        months=12,
-    )
-
     sectors_map = pd.Series(dict(zip(df["Ticker"], df["Sector"]))) if "Sector" in df.columns else None
     port_result = optimize_portfolio(
         alpha=_mdl_blended,
-        returns_panel=_ret_panel if not _ret_panel.empty else None,
         sectors=sectors_map,
         constraints=PortfolioConstraints(max_position=0.05, max_names=30, min_names=10, max_sector_weight=0.25),
     )
 
     if port_result.n_holdings > 0:
-        pc1, pc2, pc3, pc4, pc5, pc6 = st.columns(6)
+        pc1, pc2, pc3, pc4, pc5 = st.columns(5)
         pc1.metric("HOLDINGS", port_result.n_holdings)
         pc2.metric("EX-ANTE SHARPE", f"{port_result.sharpe_ratio:.3f}")
         pc3.metric("ACTIVE RISK", f"{port_result.active_risk*100:.2f}%")
         pc4.metric("TOP WEIGHT", f"{port_result.weights.max()*100:.1f}%")
         pc5.metric("TURNOVER", f"{port_result.turnover*100:.0f}%")
-        pc6.metric("COV MATRIX", "REAL" if not _ret_panel.empty else "IDENTITY")
 
         pl, pr_ = st.columns(2)
         with pl:
