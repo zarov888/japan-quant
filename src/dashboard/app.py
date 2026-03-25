@@ -654,9 +654,9 @@ st.markdown(strip_html([
 
 
 # ── Tabs ───────────────────────────────────────────────────────
-t_scr, t_pre, t_idx, t_sec, t_stk, t_val, t_qual, t_risk, t_tech, t_gov, t_port, t_opt, t_bt, t_wl, t_exp, t_comp, t_mdl = st.tabs([
+t_scr, t_pre, t_idx, t_sec, t_stk, t_val, t_qual, t_risk, t_tech, t_gov, t_port, t_opt, t_bt, t_wl, t_exp, t_comp, t_dash, t_mdl = st.tabs([
     "SCREEN", "PRESETS", "INDEX", "SECTOR", "EQUITY", "VALUATION", "QUALITY", "RISK", "TECHNICALS",
-    "GOVERNANCE", "PORTFOLIO", "OPTIMIZE", "BACKTEST", "WATCHLIST", "EXPORT", "COMPARE", "MODEL",
+    "GOVERNANCE", "PORTFOLIO", "OPTIMIZE", "BACKTEST", "WATCHLIST", "EXPORT", "COMPARE", "DASHBOARD", "MODEL",
 ])
 
 
@@ -2202,6 +2202,270 @@ with t_comp:
         st.dataframe(ctbl, use_container_width=True, hide_index=True)
     else:
         st.info("Select at least 2 stocks.")
+
+
+# ════════════════════════════════════════════════════════════════
+# DASHBOARD — custom chart builder
+# ════════════════════════════════════════════════════════════════
+with t_dash:
+    st.markdown(f'<div style="color:{GRAY}; font-size:9px; margin-bottom:8px;">Select a preset dashboard or build your own. Drag charts around by changing the layout. All charts use the current filtered universe.</div>', unsafe_allow_html=True)
+
+    # Available metrics for charting
+    CHART_METRICS = {
+        "Alpha": {"col": "Alpha", "label": "MODEL ALPHA", "fmt": ".4f", "group": "Model"},
+        "Composite": {"col": "Composite", "label": "COMPOSITE SCORE", "fmt": ".3f", "group": "Model"},
+        "LevValue": {"col": "LevValue", "label": "LEV-VALUE SCORE", "fmt": ".3f", "group": "Model"},
+        "Delever": {"col": "Delever", "label": "DELEVER SCORE", "fmt": ".3f", "group": "Model"},
+        "Quality": {"col": "Quality", "label": "QUALITY SCORE", "fmt": ".3f", "group": "Model"},
+        "Momentum": {"col": "Momentum", "label": "MOMENTUM SCORE", "fmt": ".3f", "group": "Model"},
+        "P/E": {"col": "pe_trailing", "label": "P/E RATIO", "fmt": ".1f", "group": "Valuation"},
+        "P/B": {"col": "pb_ratio", "label": "P/B RATIO", "fmt": ".2f", "group": "Valuation"},
+        "EV/EBITDA": {"col": "ev_to_ebitda", "label": "EV/EBITDA", "fmt": ".1f", "group": "Valuation"},
+        "EBITDA/EV": {"col": "ebitda_to_ev", "label": "EBITDA/EV", "fmt": ".3f", "group": "Valuation"},
+        "Div Yield": {"col": "dividend_yield", "label": "DIV YIELD", "fmt": ".3f", "group": "Valuation"},
+        "FCF Yield": {"col": "fcf_yield", "label": "FCF YIELD", "fmt": ".3f", "group": "Valuation"},
+        "ROE": {"col": "roe", "label": "ROE", "fmt": ".3f", "group": "Quality"},
+        "Op Margin": {"col": "operating_margin", "label": "OP MARGIN", "fmt": ".3f", "group": "Quality"},
+        "Revenue Growth": {"col": "revenue_growth", "label": "REV GROWTH", "fmt": ".3f", "group": "Quality"},
+        "D/E": {"col": "debt_to_equity", "label": "DEBT/EQUITY", "fmt": ".1f", "group": "Risk"},
+        "Beta": {"col": "beta", "label": "BETA", "fmt": ".2f", "group": "Risk"},
+        "LTD/EV": {"col": "lt_debt_to_ev", "label": "LT DEBT/EV", "fmt": ".3f", "group": "Risk"},
+        "MCap (B)": {"col": "mcap_b", "label": "MCAP (B JPY)", "fmt": ".0f", "group": "Size"},
+        "52w Pos": {"col": "52w_pos", "label": "52W POSITION", "fmt": ".2f", "group": "Momentum"},
+        "SMA Cross": {"col": "sma_cross", "label": "SMA CROSS", "fmt": ".3f", "group": "Momentum"},
+        "Qual Flags": {"col": "quality_flags", "label": "QUALITY FLAGS", "fmt": ".0f", "group": "Quality"},
+    }
+    metric_names = list(CHART_METRICS.keys())
+
+    CHART_TYPES = ["Scatter", "Histogram", "Bar (Top 20)", "Box by Sector", "Heatmap (Sector Avg)"]
+
+    # ── Preset dashboards ─────────────────────────────────────
+    PRESET_DASHBOARDS = {
+        "VALUE HUNTER": {
+            "desc": "Identify undervalued stocks with strong earnings yield and low multiples",
+            "charts": [
+                {"type": "Scatter", "x": "EV/EBITDA", "y": "EBITDA/EV", "color": "Alpha", "title": "VALUATION vs EARNINGS YIELD"},
+                {"type": "Scatter", "x": "P/B", "y": "ROE", "color": "Composite", "title": "P/B vs ROE (VALUE TRAP FILTER)"},
+                {"type": "Histogram", "x": "EV/EBITDA", "title": "EV/EBITDA DISTRIBUTION"},
+                {"type": "Bar (Top 20)", "x": "EBITDA/EV", "title": "TOP 20 EARNINGS YIELD"},
+            ],
+        },
+        "RISK MONITOR": {
+            "desc": "Track portfolio risk exposures across leverage, volatility, and concentration",
+            "charts": [
+                {"type": "Scatter", "x": "Beta", "y": "D/E", "color": "Alpha", "title": "BETA vs LEVERAGE"},
+                {"type": "Box by Sector", "x": "Beta", "title": "BETA BY SECTOR"},
+                {"type": "Scatter", "x": "LTD/EV", "y": "FCF Yield", "color": "Composite", "title": "LEVERAGE vs FCF YIELD"},
+                {"type": "Heatmap (Sector Avg)", "x": "Beta", "title": "SECTOR RISK HEATMAP"},
+            ],
+        },
+        "QUALITY SCREEN": {
+            "desc": "Find high-quality compounders with strong margins, ROE, and growth",
+            "charts": [
+                {"type": "Scatter", "x": "ROE", "y": "Op Margin", "color": "Quality", "title": "ROE vs OPERATING MARGIN"},
+                {"type": "Bar (Top 20)", "x": "Qual Flags", "title": "TOP 20 QUALITY FLAGS"},
+                {"type": "Histogram", "x": "ROE", "title": "ROE DISTRIBUTION"},
+                {"type": "Box by Sector", "x": "Op Margin", "title": "MARGIN BY SECTOR"},
+            ],
+        },
+        "MOMENTUM RADAR": {
+            "desc": "Spot price momentum and trend strength across the universe",
+            "charts": [
+                {"type": "Scatter", "x": "52w Pos", "y": "SMA Cross", "color": "Momentum", "title": "52W POSITION vs SMA CROSS"},
+                {"type": "Scatter", "x": "52w Pos", "y": "Alpha", "color": "Composite", "title": "MOMENTUM vs ALPHA"},
+                {"type": "Bar (Top 20)", "x": "Momentum", "title": "TOP 20 MOMENTUM SCORES"},
+                {"type": "Histogram", "x": "52w Pos", "title": "52W POSITION DISTRIBUTION"},
+            ],
+        },
+        "ALPHA DECOMPOSITION": {
+            "desc": "Understand what drives alpha — factor exposures, model agreement, conviction",
+            "charts": [
+                {"type": "Scatter", "x": "Composite", "y": "Alpha", "color": "Momentum", "title": "SCORE vs MODEL ALPHA"},
+                {"type": "Scatter", "x": "LevValue", "y": "Quality", "color": "Alpha", "title": "VALUE-QUALITY MAP"},
+                {"type": "Bar (Top 20)", "x": "Alpha", "title": "TOP 20 ALPHA"},
+                {"type": "Histogram", "x": "Alpha", "title": "ALPHA DISTRIBUTION"},
+            ],
+        },
+    }
+
+    # Dashboard selector
+    dash_mode = st.radio("MODE", ["PRESET", "CUSTOM"], horizontal=True, key="dash_mode",
+                          help="PRESET: pre-built dashboards. CUSTOM: build your own chart layout.")
+
+    if dash_mode == "PRESET":
+        preset_name = st.selectbox("DASHBOARD", list(PRESET_DASHBOARDS.keys()), key="dash_preset")
+        preset = PRESET_DASHBOARDS[preset_name]
+        st.markdown(f'<div style="color:{GRAY};font-size:10px;margin-bottom:10px;">{preset["desc"]}</div>', unsafe_allow_html=True)
+        charts_to_render = preset["charts"]
+    else:
+        # ── Custom chart builder ──────────────────────────────
+        st.markdown("### BUILD YOUR DASHBOARD")
+
+        if "custom_charts" not in st.session_state:
+            st.session_state.custom_charts = []
+
+        # Add chart form
+        with st.expander("ADD CHART", expanded=len(st.session_state.custom_charts) == 0):
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                new_chart_type = st.selectbox("CHART TYPE", CHART_TYPES, key="new_chart_type")
+                new_chart_x = st.selectbox("X-AXIS / METRIC", metric_names, key="new_chart_x")
+            with cc2:
+                new_chart_title = st.text_input("TITLE (optional)", "", key="new_chart_title")
+                if new_chart_type == "Scatter":
+                    new_chart_y = st.selectbox("Y-AXIS", metric_names, index=min(1, len(metric_names)-1), key="new_chart_y")
+                    new_chart_color = st.selectbox("COLOR BY", ["None"] + metric_names, key="new_chart_color")
+                else:
+                    new_chart_y = None
+                    new_chart_color = None
+
+            if st.button("ADD CHART", key="dash_add_chart"):
+                chart_def = {
+                    "type": new_chart_type,
+                    "x": new_chart_x,
+                    "y": new_chart_y,
+                    "color": new_chart_color if new_chart_color != "None" else None,
+                    "title": new_chart_title or f"{new_chart_type.upper()}: {new_chart_x}",
+                }
+                st.session_state.custom_charts.append(chart_def)
+                st.rerun()
+
+        # Management row
+        if st.session_state.custom_charts:
+            mgmt = st.columns([1, 1, 4])
+            with mgmt[0]:
+                if st.button("CLEAR ALL CHARTS", key="dash_clear"):
+                    st.session_state.custom_charts = []
+                    st.rerun()
+            with mgmt[1]:
+                if st.button("REMOVE LAST", key="dash_rm_last"):
+                    st.session_state.custom_charts.pop()
+                    st.rerun()
+
+        charts_to_render = st.session_state.custom_charts
+
+    # ── Render charts ─────────────────────────────────────────
+    if charts_to_render:
+        # 2-column grid
+        for row_start in range(0, len(charts_to_render), 2):
+            row_charts = charts_to_render[row_start:row_start + 2]
+            cols = st.columns(len(row_charts))
+            for ci, chart in enumerate(row_charts):
+                with cols[ci]:
+                    ctype = chart["type"]
+                    cx_name = chart.get("x", "Alpha")
+                    cy_name = chart.get("y")
+                    ccolor_name = chart.get("color")
+                    ctitle = chart.get("title", ctype)
+
+                    cx = CHART_METRICS.get(cx_name, {})
+                    cy = CHART_METRICS.get(cy_name, {}) if cy_name else None
+                    cc = CHART_METRICS.get(ccolor_name, {}) if ccolor_name else None
+
+                    cx_col = cx.get("col", "Alpha")
+                    fig = go.Figure()
+
+                    if ctype == "Scatter" and cy:
+                        cy_col = cy.get("col", "Composite")
+                        x_vals = flt[cx_col].astype(float) if cx_col in flt.columns else pd.Series(dtype=float)
+                        y_vals = flt[cy_col].astype(float) if cy_col in flt.columns else pd.Series(dtype=float)
+
+                        marker_args = dict(size=6, opacity=0.7, line=dict(width=0.5, color=BORDER))
+                        if cc and cc.get("col") in flt.columns:
+                            color_vals = flt[cc["col"]].astype(float)
+                            marker_args["color"] = color_vals
+                            marker_args["colorscale"] = [[0, RED], [0.5, GRAY], [1, GREEN]]
+                            marker_args["showscale"] = True
+                            marker_args["colorbar"] = dict(thickness=10, len=0.5, title=dict(text=cc.get("label", ""), font=dict(size=8)))
+                        else:
+                            marker_args["color"] = ORANGE
+
+                        fig.add_trace(go.Scatter(
+                            x=x_vals, y=y_vals,
+                            mode="markers",
+                            marker=marker_args,
+                            text=flt["Ticker"] if "Ticker" in flt.columns else None,
+                            hovertemplate="%{text}<br>" + cx.get("label","X") + ": %{x}<br>" + cy.get("label","Y") + ": %{y}<extra></extra>",
+                        ))
+                        fig.update_layout(**chart_layout(320, title=ctitle,
+                            xaxis=dict(title=cx.get("label", cx_name)),
+                            yaxis=dict(title=cy.get("label", cy_name or ""))))
+
+                    elif ctype == "Histogram":
+                        vals = flt[cx_col].dropna().astype(float) if cx_col in flt.columns else pd.Series(dtype=float)
+                        fig.add_trace(go.Histogram(x=vals, nbinsx=30, marker_color=ORANGE, opacity=0.8))
+                        median_val = vals.median() if len(vals) > 0 else 0
+                        fig.add_vline(x=median_val, line_dash="dot", line_color=YELLOW, annotation_text=f"MED: {median_val:.2f}",
+                                       annotation_font=dict(size=8, color=YELLOW))
+                        fig.update_layout(**chart_layout(320, title=ctitle, xaxis=dict(title=cx.get("label", cx_name))))
+
+                    elif ctype == "Bar (Top 20)":
+                        if cx_col in flt.columns:
+                            top = flt.nlargest(20, cx_col)
+                            fig.add_trace(go.Bar(
+                                x=top["Ticker"], y=top[cx_col].astype(float),
+                                marker_color=ORANGE,
+                                text=top[cx_col].apply(lambda v: f"{v:{cx.get('fmt', '.2f')}}" if pd.notna(v) else ""),
+                                textposition="outside", textfont=dict(size=7, color=WHITE),
+                            ))
+                        fig.update_layout(**chart_layout(320, title=ctitle,
+                            xaxis=dict(tickangle=-45, tickfont=dict(size=7)), yaxis=dict(title=cx.get("label", cx_name))))
+
+                    elif ctype == "Box by Sector":
+                        if cx_col in flt.columns and "Sector" in flt.columns:
+                            sectors_sorted = flt.groupby("Sector")[cx_col].median().sort_values(ascending=False).index
+                            sector_colors = [ORANGE, GREEN, YELLOW, "#6699ff", "#cc66ff", RED, GRAY, "#ff6699", ORANGE_DIM, "#66cccc"]
+                            for si, sect in enumerate(sectors_sorted):
+                                sdata = flt[flt["Sector"] == sect][cx_col].dropna().astype(float)
+                                if len(sdata) > 2:
+                                    fig.add_trace(go.Box(
+                                        y=sdata, name=sect[:12],
+                                        marker_color=sector_colors[si % len(sector_colors)],
+                                        boxmean=True, line=dict(width=1),
+                                    ))
+                        fig.update_layout(**chart_layout(320, title=ctitle, showlegend=False,
+                            xaxis=dict(tickangle=-45, tickfont=dict(size=7))))
+
+                    elif ctype == "Heatmap (Sector Avg)":
+                        if cx_col in flt.columns and "Sector" in flt.columns:
+                            # Sector x multiple metrics heatmap
+                            heat_metrics = ["Alpha", "Composite", cx_name]
+                            heat_cols = []
+                            for hm in heat_metrics:
+                                hc = CHART_METRICS.get(hm, {}).get("col")
+                                if hc and hc in flt.columns:
+                                    heat_cols.append((hm, hc))
+
+                            if heat_cols:
+                                sectors_list = sorted(flt["Sector"].dropna().unique())
+                                z_data = []
+                                for hm_name, hm_col in heat_cols:
+                                    row = []
+                                    for sect in sectors_list:
+                                        val = flt[flt["Sector"] == sect][hm_col].astype(float).mean()
+                                        row.append(round(val, 3) if pd.notna(val) else 0)
+                                    z_data.append(row)
+
+                                fig = go.Figure(data=go.Heatmap(
+                                    z=z_data,
+                                    x=[s[:12] for s in sectors_list],
+                                    y=[h[0] for h in heat_cols],
+                                    colorscale=[[0, RED], [0.5, BG1], [1, GREEN]],
+                                    text=[[f"{v:.3f}" for v in row] for row in z_data],
+                                    texttemplate="%{text}",
+                                    textfont=dict(size=8),
+                                ))
+                        fig.update_layout(**chart_layout(320, title=ctitle,
+                            xaxis=dict(tickangle=-45, tickfont=dict(size=7))))
+
+                    st.plotly_chart(fig, use_container_width=True)
+
+    elif dash_mode == "CUSTOM":
+        st.markdown(f"""<div style="text-align:center; padding:50px; color:{GRAY};">
+        <div style="font-size:12px; color:{ORANGE}; letter-spacing:2px; margin-bottom:12px;">NO CHARTS</div>
+        <div style="font-size:10px;">Click ADD CHART above to build your custom dashboard.<br>
+        Choose chart types, metrics, and colors to visualize the data you care about.</div>
+        </div>""", unsafe_allow_html=True)
 
 
 # ── MODEL tab ──────────────────────────────────────────────────
