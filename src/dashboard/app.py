@@ -1038,6 +1038,63 @@ with t_idx:
     sec_agg.columns = ["SECTOR", "N", "AVG COMP", "MED P/B", "MED P/E", "MED DIV", "MED ROE", "TOT MCAP(B)", "MED BETA", "MED QF"]
     st.dataframe(sec_agg, use_container_width=True, hide_index=True)
 
+    # --- Market Cap Treemap by Sector ---
+    try:
+        tree_df = df[["Ticker", "Sector", "mcap_b", "Composite"]].dropna(subset=["mcap_b", "Sector"])
+        tree_df = tree_df[tree_df["mcap_b"] > 0].copy()
+        fig = go.Figure(go.Treemap(
+            labels=tree_df["Ticker"],
+            parents=tree_df["Sector"],
+            values=tree_df["mcap_b"],
+            marker=dict(
+                colors=tree_df["Composite"],
+                colorscale=[[0, RED], [0.5, YELLOW], [1, GREEN]],
+                showscale=True, colorbar=dict(title="Composite", tickfont=dict(color=GRAY)),
+            ),
+            textinfo="label+value",
+            textfont=dict(size=10),
+            hovertemplate="<b>%{label}</b><br>MCap: %{value:.1f}B<br>Composite: %{color:.3f}<extra></extra>",
+        ))
+        fig.update_layout(**chart_layout(500), title="MARKET CAP TREEMAP BY SECTOR")
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.caption(f"Treemap unavailable: {e}")
+
+    # --- Sector Performance Radar ---
+    try:
+        radar_agg = df.groupby("Sector").agg(
+            avg_comp=("Composite", "mean"),
+            med_roe=("roe", "median"),
+            med_div=("dividend_yield", "median"),
+            avg_qf=("quality_flags", "mean"),
+            med_pb=("pb_ratio", "median"),
+        ).dropna()
+        # Normalise each dimension to 0-1 for radar display
+        radar_norm = radar_agg.copy()
+        for c in radar_norm.columns:
+            cmin, cmax = radar_norm[c].min(), radar_norm[c].max()
+            radar_norm[c] = (radar_norm[c] - cmin) / (cmax - cmin + 1e-9) if cmax > cmin else 0.5
+        # Invert P/B so lower = better
+        radar_norm["med_pb"] = 1 - radar_norm["med_pb"]
+        categories = ["Avg Composite", "Median ROE", "Median Div Yield", "Avg Quality Flags", "Value (inv P/B)"]
+        fig = go.Figure()
+        for sec in radar_norm.index:
+            vals = radar_norm.loc[sec].tolist()
+            vals.append(vals[0])  # close polygon
+            fig.add_trace(go.Scatterpolar(
+                r=vals, theta=categories + [categories[0]],
+                name=sec, fill="toself", opacity=0.25,
+                line=dict(width=1),
+            ))
+        fig.update_layout(**chart_layout(450, showlegend=True,
+                          legend=dict(font=dict(size=8), orientation="v", x=1.02, bgcolor="rgba(0,0,0,0)")),
+                          title="SECTOR PERFORMANCE RADAR",
+                          polar=dict(bgcolor=BG1, radialaxis=dict(visible=True, range=[0, 1], tickfont=dict(size=8, color=GRAY)),
+                                     angularaxis=dict(tickfont=dict(size=9, color=WHITE))))
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.caption(f"Radar chart unavailable: {e}")
+
 
 # ════════════════════════════════════════════════════════════════
 # SECTOR
@@ -1090,6 +1147,57 @@ with t_sec:
         for c in ["EBITDA/EV", "LTD/EV", "DIV%", "ROE%", "FCF_Y"]:
             stbl[c] = stbl[c].apply(lambda x: f"{x*100:.1f}" if pd.notna(x) else "--")
         st.dataframe(stbl, use_container_width=True, height=400)
+
+        # --- Factor Heatmap for Sector ---
+        try:
+            factor_cols = {"pb_ratio": "P/B", "pe_trailing": "P/E", "roe": "ROE", "dividend_yield": "Div%",
+                           "fcf_yield": "FCF_Y", "debt_to_equity": "D/E", "beta": "Beta"}
+            if sel_sec != "ALL" and len(sdf) <= 30:
+                # Per-stock heatmap for selected sector
+                hm_df = sdf.set_index("Ticker")[list(factor_cols.keys())].copy()
+                hm_df.columns = list(factor_cols.values())
+                # z-score for colour
+                hm_z = hm_df.apply(lambda c: (c - c.mean()) / (c.std() + 1e-9))
+                fig = go.Figure(data=go.Heatmap(
+                    z=hm_z.values, x=hm_z.columns.tolist(), y=hm_z.index.tolist(),
+                    colorscale=[[0, GREEN], [0.5, BG1], [1, RED]],
+                    zmin=-2, zmax=2, text=hm_df.round(2).values, texttemplate="%{text}", textfont=dict(size=8),
+                ))
+                fig.update_layout(**chart_layout(max(300, len(sdf) * 22)), title=f"FACTOR HEATMAP: {sel_sec} (per stock)")
+            else:
+                # Per-sector mean heatmap
+                hm_df = flt.groupby("Sector")[list(factor_cols.keys())].mean()
+                hm_df.columns = list(factor_cols.values())
+                hm_z = hm_df.apply(lambda c: (c - c.mean()) / (c.std() + 1e-9))
+                fig = go.Figure(data=go.Heatmap(
+                    z=hm_z.values, x=hm_z.columns.tolist(), y=hm_z.index.tolist(),
+                    colorscale=[[0, GREEN], [0.5, BG1], [1, RED]],
+                    zmin=-2, zmax=2, text=hm_df.round(2).values, texttemplate="%{text}", textfont=dict(size=8),
+                ))
+                fig.update_layout(**chart_layout(max(300, len(hm_df) * 28)), title="FACTOR HEATMAP BY SECTOR (mean)")
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.caption(f"Factor heatmap unavailable: {e}")
+
+        # --- Sector vs Universe Box Plots ---
+        try:
+            if sel_sec != "ALL":
+                box_metrics = [("pb_ratio", "P/B"), ("roe", "ROE"), ("dividend_yield", "Div Yield"), ("ev_to_ebitda", "EV/EBITDA")]
+                fig = make_subplots(rows=2, cols=2, subplot_titles=[m[1] for m in box_metrics])
+                for idx, (col, label) in enumerate(box_metrics):
+                    r, c = idx // 2 + 1, idx % 2 + 1
+                    sect_vals = flt.loc[flt["Sector"] == sel_sec, col].dropna()
+                    rest_vals = flt.loc[flt["Sector"] != sel_sec, col].dropna()
+                    # Scale percentages for display
+                    mult = 100 if col in ("roe", "dividend_yield") else 1
+                    fig.add_trace(go.Box(y=rest_vals * mult, name="Universe", marker_color=GRAY, boxmean=True), row=r, col=c)
+                    fig.add_trace(go.Box(y=sect_vals * mult, name=sel_sec, marker_color=ORANGE, boxmean=True), row=r, col=c)
+                fig.update_layout(**chart_layout(420, showlegend=False), title=f"SECTOR vs UNIVERSE: {sel_sec}")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.caption("Select a specific sector to compare against the universe.")
+        except Exception as e:
+            st.caption(f"Box plots unavailable: {e}")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1297,6 +1405,69 @@ with t_val:
                       xaxis_title="EV/EBITDA", yaxis_title="FCF YIELD %")
     st.plotly_chart(fig, use_container_width=True)
 
+    # --- Composite Value Score Breakdown ---
+    try:
+        comp_cols = ["LevValue", "Delever", "Quality", "Momentum"]
+        breakdown = flt[["Ticker"] + comp_cols].copy().sort_values("Ticker")
+        breakdown = breakdown.set_index("Ticker")
+        fig = go.Figure()
+        colors = [ORANGE, GREEN, YELLOW, "#6c7bff"]
+        for i, col in enumerate(comp_cols):
+            fig.add_trace(go.Bar(
+                x=breakdown.index, y=breakdown[col], name=col,
+                marker_color=colors[i], marker_line_width=0,
+            ))
+        fig.update_layout(**chart_layout(380, barmode="stack",
+                          xaxis=dict(tickangle=-45, tickfont=dict(size=8)),
+                          showlegend=True, legend=dict(font=dict(size=9), orientation="h", y=1.12)),
+                          title="COMPOSITE SCORE BREAKDOWN")
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.caption(f"Score breakdown unavailable: {e}")
+
+    # --- Cheapness Heatmap ---
+    try:
+        cheap_cols = {"pb_ratio": "P/B", "pe_trailing": "P/E", "ev_to_ebitda": "EV/EBITDA",
+                      "dividend_yield": "Div%", "fcf_yield": "FCF_Y"}
+        cheap_df = flt.set_index("Ticker")[list(cheap_cols.keys())].dropna(how="all").copy()
+        cheap_df.columns = list(cheap_cols.values())
+        # z-score: for Div% and FCF_Y, higher = cheaper so invert
+        cheap_z = cheap_df.apply(lambda c: (c - c.mean()) / (c.std() + 1e-9))
+        for inv_col in ["Div%", "FCF_Y"]:
+            if inv_col in cheap_z.columns:
+                cheap_z[inv_col] = -cheap_z[inv_col]
+        fig = go.Figure(data=go.Heatmap(
+            z=cheap_z.values, x=cheap_z.columns.tolist(), y=cheap_z.index.tolist(),
+            colorscale=[[0, GREEN], [0.5, BG1], [1, RED]],
+            zmin=-2, zmax=2, text=cheap_df.round(2).values, texttemplate="%{text}", textfont=dict(size=8),
+        ))
+        fig.update_layout(**chart_layout(max(350, len(cheap_z) * 22)), title="CHEAPNESS HEATMAP (green=cheap, red=expensive)")
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.caption(f"Cheapness heatmap unavailable: {e}")
+
+    # --- Value vs Momentum Scatter ---
+    try:
+        vm_data = flt.dropna(subset=["LevValue", "Momentum"])
+        fig = go.Figure()
+        for sec in vm_data["Sector"].unique():
+            s = vm_data[vm_data["Sector"] == sec]
+            fig.add_trace(go.Scatter(
+                x=s["LevValue"], y=s["Momentum"], mode="markers+text",
+                name=sec, text=s["Ticker"], textposition="top center",
+                textfont=dict(size=7, color=GRAY),
+                marker=dict(size=np.clip(s["mcap_b"].fillna(1).apply(np.log) * 4, 5, 22),
+                            color=s["Composite"], colorscale=[[0, RED], [0.5, YELLOW], [1, GREEN]],
+                            showscale=False, line=dict(width=0.3, color=BG)),
+                hovertemplate="%{text}<br>LevValue: %{x:.3f}<br>Momentum: %{y:.3f}<extra></extra>",
+            ))
+        fig.update_layout(**chart_layout(400, showlegend=True,
+                          legend=dict(font=dict(size=8), orientation="v", x=1.02, bgcolor="rgba(0,0,0,0)")),
+                          title="VALUE vs MOMENTUM", xaxis_title="LevValue", yaxis_title="Momentum")
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.caption(f"Value vs Momentum scatter unavailable: {e}")
+
 
 # ════════════════════════════════════════════════════════════════
 # QUALITY
@@ -1345,6 +1516,62 @@ with t_qual:
     fig.update_layout(**chart_layout(350), title="ROE vs OPERATING MARGIN",
                       xaxis_title="ROE %", yaxis_title="OP MARGIN %")
     st.plotly_chart(fig, use_container_width=True)
+
+    # --- Quality Scorecard Radar (Top 5) ---
+    try:
+        radar_cols = {"roe": "ROE", "operating_margin": "Op Margin", "fcf_yield": "FCF Yield",
+                      "quality_flags": "Quality Flags", "revenue_growth": "Rev Growth", "current_ratio": "Current Ratio"}
+        top5 = flt.nlargest(5, "quality_flags")[["Ticker"] + list(radar_cols.keys())].dropna(how="all")
+        if len(top5) > 0:
+            # Normalise to 0-1 for radar
+            radar_vals = top5[list(radar_cols.keys())].copy()
+            for c in radar_vals.columns:
+                cmin, cmax = radar_vals[c].min(), radar_vals[c].max()
+                radar_vals[c] = (radar_vals[c] - cmin) / (cmax - cmin + 1e-9) if cmax > cmin else 0.5
+            categories = list(radar_cols.values())
+            fig = go.Figure()
+            for i, (_, row) in enumerate(top5.iterrows()):
+                vals = radar_vals.iloc[i].tolist()
+                vals.append(vals[0])
+                fig.add_trace(go.Scatterpolar(
+                    r=vals, theta=categories + [categories[0]],
+                    name=row["Ticker"], fill="toself", opacity=0.3,
+                ))
+            fig.update_layout(**chart_layout(420, showlegend=True,
+                              legend=dict(font=dict(size=9), orientation="h", y=-0.15, bgcolor="rgba(0,0,0,0)")),
+                              title="QUALITY SCORECARD — TOP 5",
+                              polar=dict(bgcolor=BG1, radialaxis=dict(visible=True, range=[0, 1], tickfont=dict(size=8, color=GRAY)),
+                                         angularaxis=dict(tickfont=dict(size=9, color=WHITE))))
+            st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.caption(f"Quality radar unavailable: {e}")
+
+    # --- Quality vs Valuation ---
+    try:
+        qv_data = flt.dropna(subset=["quality_flags", "pb_ratio"])
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=qv_data["pb_ratio"], y=qv_data["quality_flags"],
+            mode="markers+text", text=qv_data["Ticker"], textposition="top center",
+            textfont=dict(size=8, color=GRAY),
+            marker=dict(size=9, color=qv_data["Composite"],
+                        colorscale=[[0, RED], [0.5, YELLOW], [1, GREEN]],
+                        showscale=True, colorbar=dict(title="Comp", tickfont=dict(color=GRAY)),
+                        line=dict(width=0.5, color=BG)),
+            hovertemplate="%{text}<br>P/B: %{x:.2f}<br>QF: %{y}<extra></extra>",
+        ))
+        # Quadrant lines
+        med_pb = qv_data["pb_ratio"].median()
+        med_qf = qv_data["quality_flags"].median()
+        fig.add_hline(y=med_qf, line_dash="dot", line_color=GRAY_DIM)
+        fig.add_vline(x=med_pb, line_dash="dot", line_color=GRAY_DIM)
+        fig.add_annotation(x=qv_data["pb_ratio"].quantile(0.1), y=qv_data["quality_flags"].quantile(0.9),
+                           text="HIGH QUALITY + CHEAP", showarrow=False, font=dict(size=10, color=GREEN))
+        fig.update_layout(**chart_layout(380), title="QUALITY vs VALUATION",
+                          xaxis_title="P/B RATIO", yaxis_title="QUALITY FLAGS")
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.caption(f"Quality vs Valuation unavailable: {e}")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1407,6 +1634,50 @@ with t_risk:
     fig.update_layout(**chart_layout(400), title="FACTOR CORRELATION")
     st.plotly_chart(fig, use_container_width=True)
 
+    # --- Risk-Return Scatter ---
+    try:
+        rr_data = flt.dropna(subset=["beta", "Composite"])
+        fig = go.Figure()
+        for sec in rr_data["Sector"].unique():
+            s = rr_data[rr_data["Sector"] == sec]
+            fig.add_trace(go.Scatter(
+                x=s["beta"], y=s["Composite"], mode="markers+text",
+                name=sec, text=s["Ticker"], textposition="top center",
+                textfont=dict(size=7, color=GRAY),
+                marker=dict(size=8, line=dict(width=0.3, color=BG)),
+                hovertemplate="%{text}<br>Beta: %{x:.2f}<br>Composite: %{y:.3f}<extra></extra>",
+            ))
+        # Highlight best risk/reward quadrant
+        med_beta = rr_data["beta"].median()
+        med_comp = rr_data["Composite"].median()
+        fig.add_hline(y=med_comp, line_dash="dot", line_color=GRAY_DIM)
+        fig.add_vline(x=med_beta, line_dash="dot", line_color=GRAY_DIM)
+        fig.add_annotation(x=rr_data["beta"].quantile(0.1), y=rr_data["Composite"].quantile(0.9),
+                           text="BEST RISK/REWARD", showarrow=False, font=dict(size=10, color=GREEN))
+        fig.update_layout(**chart_layout(400, showlegend=True,
+                          legend=dict(font=dict(size=8), orientation="v", x=1.02, bgcolor="rgba(0,0,0,0)")),
+                          title="RISK-RETURN MAP", xaxis_title="BETA", yaxis_title="COMPOSITE (return proxy)")
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.caption(f"Risk-return scatter unavailable: {e}")
+
+    # --- Leverage Distribution ---
+    try:
+        de_vals = flt["debt_to_equity"].dropna()
+        de_vals = de_vals[de_vals < 500]  # cap outliers for readability
+        fig = go.Figure()
+        fig.add_trace(go.Histogram(
+            x=de_vals, nbinsx=30, marker_color=ORANGE, marker_line_width=0, opacity=0.85,
+        ))
+        for thresh, clr, lbl in [(50, GREEN, "50"), (100, YELLOW, "100"), (200, RED, "200")]:
+            fig.add_vline(x=thresh, line_dash="dash", line_color=clr, line_width=1.5,
+                          annotation_text=f"D/E={lbl}", annotation_font=dict(size=9, color=clr))
+        fig.update_layout(**chart_layout(320), title="LEVERAGE DISTRIBUTION (D/E)",
+                          xaxis_title="DEBT / EQUITY", yaxis_title="COUNT")
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.caption(f"Leverage distribution unavailable: {e}")
+
 
 # ════════════════════════════════════════════════════════════════
 # TECHNICALS
@@ -1460,6 +1731,49 @@ with t_tech:
         fig.update_layout(**chart_layout(300, xaxis=dict(tickangle=-45, tickfont=dict(size=8))),
                           title="SMA50/SMA200 CROSS %", yaxis_title="% ABOVE/BELOW")
         st.plotly_chart(fig, use_container_width=True)
+
+    # --- Breadth Indicators ---
+    try:
+        n_total = len(flt)
+        if n_total > 0:
+            pct_above_sma200 = (flt["current_price"] > flt["two_hundred_day_avg"]).sum() / n_total * 100
+            pct_golden = (flt["sma_cross"].dropna() > 0).sum() / n_total * 100
+            pct_near_52hi = (flt["52w_pos"].dropna() > 0.8).sum() / n_total * 100
+            bc1, bc2, bc3 = st.columns(3)
+            with bc1:
+                clr = "dc-green" if pct_above_sma200 >= 50 else "dc-red"
+                st.markdown(strip_html([("ABOVE SMA200", f"{pct_above_sma200:.0f}%", clr, "% of stocks trading above their 200-day SMA — market breadth indicator")]), unsafe_allow_html=True)
+            with bc2:
+                clr = "dc-green" if pct_golden >= 30 else "dc-red"
+                st.markdown(strip_html([("GOLDEN CROSS", f"{pct_golden:.0f}%", clr, "% of stocks with SMA50 > SMA200 — bullish signal breadth")]), unsafe_allow_html=True)
+            with bc3:
+                clr = "dc-green" if pct_near_52hi >= 20 else "dc-orange"
+                st.markdown(strip_html([("NEAR 52W HIGH", f"{pct_near_52hi:.0f}%", clr, "% of stocks within 20% of their 52-week high")]), unsafe_allow_html=True)
+    except Exception as e:
+        st.caption(f"Breadth indicators unavailable: {e}")
+
+    # --- Price Momentum Heatmap by Sector ---
+    try:
+        mom_agg = flt.copy()
+        mom_agg["above_sma50"] = (mom_agg["current_price"] > mom_agg["fifty_day_avg"]).astype(float)
+        mom_agg["above_sma200"] = (mom_agg["current_price"] > mom_agg["two_hundred_day_avg"]).astype(float)
+        sec_mom = mom_agg.groupby("Sector").agg(
+            pct_sma50=("above_sma50", "mean"),
+            pct_sma200=("above_sma200", "mean"),
+            avg_52w=("52w_pos", "mean"),
+            avg_sma_cross=("sma_cross", "mean"),
+        ).dropna()
+        sec_mom = sec_mom * 100  # to percentages
+        sec_mom.columns = ["% > SMA50", "% > SMA200", "Avg 52W Pos%", "Avg SMA Cross%"]
+        fig = go.Figure(data=go.Heatmap(
+            z=sec_mom.values, x=sec_mom.columns.tolist(), y=sec_mom.index.tolist(),
+            colorscale=[[0, RED], [0.5, YELLOW], [1, GREEN]],
+            text=sec_mom.round(1).values, texttemplate="%{text}", textfont=dict(size=9),
+        ))
+        fig.update_layout(**chart_layout(max(300, len(sec_mom) * 28)), title="PRICE MOMENTUM HEATMAP BY SECTOR")
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.caption(f"Momentum heatmap unavailable: {e}")
 
 
 # ════════════════════════════════════════════════════════════════
