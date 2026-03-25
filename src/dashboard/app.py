@@ -680,9 +680,26 @@ st.markdown(strip_html([
 
 
 # ── Tabs ───────────────────────────────────────────────────────
-t_scr, t_pre, t_idx, t_sec, t_stk, t_val, t_qual, t_risk, t_tech, t_gov, t_port, t_opt, t_bt, t_wl, t_exp, t_comp, t_dash, t_mdl = st.tabs([
-    "SCREEN", "PRESETS", "INDEX", "SECTOR", "EQUITY", "VALUATION", "QUALITY", "RISK", "TECHNICALS",
-    "GOVERNANCE", "PORTFOLIO", "OPTIMIZE", "BACKTEST", "WATCHLIST", "EXPORT", "COMPARE", "DASHBOARD", "MODEL",
+# Group tabs logically: Core workflow first, then analysis, then tools
+t_scr, t_mdl, t_port, t_opt, t_bt, t_dash, t_idx, t_sec, t_val, t_qual, t_risk, t_tech, t_stk, t_gov, t_pre, t_wl, t_comp, t_exp = st.tabs([
+    "SCREEN",      # 1. Main screener
+    "MODEL",       # 2. Alpha model
+    "PORTFOLIO",   # 3. Build portfolio
+    "OPTIMIZE",    # 4. Optimize weights
+    "BACKTEST",    # 5. Test it
+    "DASHBOARD",   # 6. Custom charts
+    "INDEX",       # 7. Market overview
+    "SECTOR",      # 8. Sector breakdown
+    "VALUATION",   # 9. Value metrics
+    "QUALITY",     # 10. Quality metrics
+    "RISK",        # 11. Risk metrics
+    "TECHNICALS",  # 12. Technical signals
+    "EQUITY",      # 13. Single stock
+    "GOVERNANCE",  # 14. Gov scores
+    "PRESETS",     # 15. Saved screens
+    "WATCHLIST",   # 16. Tracked positions
+    "COMPARE",     # 17. Side-by-side
+    "EXPORT",      # 18. Download data
 ])
 
 

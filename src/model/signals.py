@@ -529,7 +529,10 @@ def quintile_analysis(
     if len(merged) < 10:
         return {"error": "insufficient_data"}
 
-    merged["quintile"] = pd.qcut(merged["alpha"], 5, labels=["Q1", "Q2", "Q3", "Q4", "Q5"])
+    try:
+        merged["quintile"] = pd.qcut(merged["alpha"], 5, labels=["Q1", "Q2", "Q3", "Q4", "Q5"], duplicates="drop")
+    except ValueError:
+        return {"error": "insufficient_spread"}
 
     result = {}
     for q in ["Q1", "Q2", "Q3", "Q4", "Q5"]:
