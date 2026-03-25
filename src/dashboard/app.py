@@ -33,6 +33,7 @@ from src.model.signals import (
     factor_rank_model, momentum_model, ml_ensemble_model,
     mean_reversion_model, blend_signals, ModelSignal, BlendedSignal,
     quintile_analysis, signal_diagnostics, build_returns_panel,
+    generate_insights,
 )
 
 # ── Log capture ───────────────────────────────────────────────
@@ -734,7 +735,81 @@ t_scr, t_mdl, t_port, t_opt, t_bt, t_dash, t_idx, t_sec, t_val, t_qual, t_risk, 
 # SCREEN
 # ════════════════════════════════════════════════════════════════
 with t_scr:
-    # Main table
+    # ── INSIGHTS PANEL ────────────────────────────────────────
+    try:
+        _insights = generate_insights(df, blended_alpha, model_sigs)
+    except Exception:
+        _insights = []
+
+    if _insights:
+        st.markdown(f'<div style="color:{ORANGE};font-size:11px;letter-spacing:2px;font-weight:600;margin-bottom:8px;">INSIGHTS</div>', unsafe_allow_html=True)
+
+        insight_colors = {"BUY": GREEN, "AVOID": RED, "SECTOR": "#6699ff", "RISK": RED,
+                          "OPPORTUNITY": YELLOW, "WARNING": "#cc6600"}
+        insight_icons = {"BUY": "+", "AVOID": "-", "SECTOR": "~", "RISK": "!",
+                         "OPPORTUNITY": "*", "WARNING": "!"}
+
+        # Show top insights in cards
+        n_show = min(6, len(_insights))
+        insight_cols = st.columns(min(3, n_show))
+        for idx, ins in enumerate(_insights[:n_show]):
+            col = insight_cols[idx % len(insight_cols)]
+            icolor = insight_colors.get(ins["type"], GRAY)
+            icon = insight_icons.get(ins["type"], "?")
+            tickers_str = ""
+            if ins.get("tickers"):
+                tickers_str = f'<div style="margin-top:4px;"><span style="color:{ORANGE};font-size:8px;letter-spacing:1px;">TICKERS: </span><span style="color:{WHITE};font-size:9px;">{", ".join(ins["tickers"][:6])}{"..." if len(ins["tickers"]) > 6 else ""}</span></div>'
+
+            col.markdown(f"""<div style="background:{BG2};border:1px solid {BORDER};border-left:3px solid {icolor};padding:10px;margin-bottom:6px;border-radius:2px;">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+                    <span style="color:{icolor};font-size:10px;font-weight:700;letter-spacing:1px;">[{ins["type"]}]</span>
+                    <span style="color:{WHITE};font-size:10px;font-weight:600;">{ins["title"]}</span>
+                </div>
+                <div style="color:{GRAY};font-size:9px;line-height:1.4;">{ins["detail"]}</div>
+                {tickers_str}
+            </div>""", unsafe_allow_html=True)
+
+        # Expandable full insights
+        if len(_insights) > n_show:
+            with st.expander(f"VIEW ALL {len(_insights)} INSIGHTS"):
+                for ins in _insights[n_show:]:
+                    icolor = insight_colors.get(ins["type"], GRAY)
+                    st.markdown(f'<div style="padding:4px 0;border-bottom:1px solid {BORDER};">'
+                                f'<span style="color:{icolor};font-weight:600;">[{ins["type"]}]</span> '
+                                f'<span style="color:{WHITE};">{ins["title"]}</span> — '
+                                f'<span style="color:{GRAY};font-size:9px;">{ins["detail"][:200]}</span></div>',
+                                unsafe_allow_html=True)
+
+    # ── TOP PICKS SUMMARY ────────────────────────────────────
+    st.markdown(f'<div style="color:{ORANGE};font-size:11px;letter-spacing:2px;font-weight:600;margin:12px 0 6px;">TOP PICKS BY ALPHA</div>', unsafe_allow_html=True)
+
+    top5_alpha = blended_alpha.nlargest(5)
+    pick_cols = st.columns(5)
+    for pi, (ticker, alpha_val) in enumerate(top5_alpha.items()):
+        with pick_cols[pi]:
+            row = df[df["Ticker"] == ticker]
+            if len(row) > 0:
+                r = row.iloc[0]
+                price = r.get("current_price", 0)
+                comp = r.get("Composite", 0)
+                pb = r.get("pb_ratio", None)
+                roe = r.get("roe", None)
+                sect = r.get("Sector", "")[:15]
+                name = r.get("Name", "")[:20]
+                pb_str = f"P/B {pb:.2f}" if pd.notna(pb) else "--"
+                roe_str = f"ROE {roe*100:.0f}%" if pd.notna(roe) else "--"
+
+                st.markdown(f"""<div style="background:{BG2};border:1px solid {BORDER};border-top:2px solid {GREEN};padding:8px;text-align:center;">
+                    <div style="color:{ORANGE};font-size:13px;font-weight:700;letter-spacing:1px;">{ticker}</div>
+                    <div style="color:{GRAY};font-size:8px;margin:2px 0;">{name}</div>
+                    <div style="color:{WHITE};font-size:11px;margin:4px 0;">A {alpha_val:.2f}</div>
+                    <div style="color:{GRAY};font-size:9px;">Y{price:,.0f} | {pb_str}</div>
+                    <div style="color:{GRAY};font-size:9px;">{roe_str} | {sect}</div>
+                    <div style="color:{GRAY};font-size:8px;">SCORE {comp:.3f}</div>
+                </div>""", unsafe_allow_html=True)
+
+    # ── MAIN TABLE ────────────────────────────────────────────
+    st.markdown(f'<div style="color:{ORANGE};font-size:11px;letter-spacing:2px;font-weight:600;margin:12px 0 6px;">UNIVERSE ({len(flt)} stocks)</div>', unsafe_allow_html=True)
     tcols = ["Ticker", "Name", "Sector", "current_price", "Alpha", "AlphaRank", "Composite", "Screen", "LevValue", "Delever", "Quality", "Momentum",
              "pe_trailing", "pb_ratio", "ev_to_ebitda", "ebitda_to_ev", "lt_debt_to_ev",
              "dividend_yield", "roe", "debt_to_equity", "fcf_yield", "beta", "mcap_b", "quality_flags"]
@@ -752,7 +827,7 @@ with t_scr:
         "NAME": "Company name",
         "SECTOR": "GICS sector classification",
         "PRICE": "Last traded price (JPY)",
-        "ALPHA": "Model alpha — blended signal from Factor Rank (50%), Momentum (25%), ML Ensemble (25%). Z-scored, higher = more attractive",
+        "ALPHA": "Blended alpha from 4 models (Factor Rank 40%, Momentum 20%, ML 20%, Mean Reversion 20%)",
         "A#": "Alpha rank in universe (1 = highest alpha)",
         "COMP": "Composite score — weighted blend of all factor groups (0-1)",
         "SCR": "Screen status — PASS means stock meets all primary + bankruptcy hard filters",
@@ -774,7 +849,7 @@ with t_scr:
         "QF": "Quality flags (0-7): ROE>8%, margin>5%, rev growth, earn growth, CR>1, net cash, FCF>3%",
     }
     col_cfg = {col: st.column_config.Column(help=tip) for col, tip in col_tooltips.items()}
-    st.dataframe(tdf, use_container_width=True, height=700, column_config=col_cfg)
+    st.dataframe(tdf, use_container_width=True, height=500, column_config=col_cfg)
 
     # Distribution + stacked bars side by side
     dl, dr = st.columns(2)

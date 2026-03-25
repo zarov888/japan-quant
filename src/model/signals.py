@@ -690,6 +690,254 @@ def blend_signals(
     )
 
 
+# ── Insights Engine ────────────────────────────────────────────
+
+def generate_insights(df: pd.DataFrame, blended_alpha: pd.Series, model_sigs: dict) -> list[dict]:
+    """
+    Generate actionable insights from the current universe state.
+
+    Returns a list of insight dicts with:
+      - type: "BUY" | "AVOID" | "SECTOR" | "RISK" | "OPPORTUNITY" | "WARNING"
+      - title: short headline
+      - detail: explanation with specific numbers
+      - tickers: relevant tickers (if any)
+      - priority: 1 (highest) to 5 (lowest)
+    """
+    insights = []
+    tickers = df["Ticker"].values if "Ticker" in df.columns else df.index.values
+    n = len(df)
+    if n < 5:
+        return insights
+
+    # ── 1. TOP CONVICTION PICKS ──────────────────────────────
+    # Stocks where ALL models agree (top quartile in every model)
+    agreement = pd.DataFrame({"Ticker": tickers})
+    for mname, mdata in model_sigs.items():
+        ms = pd.Series(mdata["alpha"])
+        q75 = ms.quantile(0.75)
+        agreement[mname] = ms.reindex(tickers).fillna(0) > q75
+
+    model_cols = [c for c in agreement.columns if c != "Ticker"]
+    agreement["agree_count"] = agreement[model_cols].sum(axis=1)
+    consensus_buys = agreement[agreement["agree_count"] == len(model_cols)]
+
+    if len(consensus_buys) > 0:
+        tks = consensus_buys["Ticker"].tolist()
+        # Get their scores
+        buy_df = df[df["Ticker"].isin(tks)].copy()
+        if "Composite" in buy_df.columns:
+            buy_df = buy_df.sort_values("Composite", ascending=False)
+        top5 = buy_df.head(5)
+        details = []
+        for _, r in top5.iterrows():
+            t = r["Ticker"]
+            comp = r.get("Composite", 0)
+            alpha = blended_alpha.get(t, 0)
+            pb = r.get("pb_ratio", None)
+            roe = r.get("roe", None)
+            pb_str = f"P/B {pb:.2f}" if pd.notna(pb) else ""
+            roe_str = f"ROE {roe*100:.0f}%" if pd.notna(roe) else ""
+            details.append(f"{t} (alpha {alpha:.2f}, score {comp:.3f}, {pb_str}, {roe_str})")
+        insights.append({
+            "type": "BUY",
+            "title": f"{len(tks)} stocks with full model consensus",
+            "detail": f"All {len(model_cols)} alpha models rank these in top quartile simultaneously. "
+                      f"Top picks: {'; '.join(details[:5])}",
+            "tickers": tks[:10],
+            "priority": 1,
+        })
+
+    # ── 2. VALUE DISLOCATIONS ────────────────────────────────
+    # Stocks trading below book with positive earnings
+    if "pb_ratio" in df.columns and "roe" in df.columns:
+        below_book = df[(df["pb_ratio"] < 1.0) & (df["pb_ratio"] > 0) & (df["roe"] > 0.05)]
+        if len(below_book) > 0:
+            below_book = below_book.sort_values("pb_ratio")
+            cheapest = below_book.head(5)
+            details = [f"{r['Ticker']} (P/B {r['pb_ratio']:.2f}, ROE {r['roe']*100:.0f}%)"
+                       for _, r in cheapest.iterrows()]
+            insights.append({
+                "type": "OPPORTUNITY",
+                "title": f"{len(below_book)} stocks below book value with positive ROE",
+                "detail": f"Trading below liquidation value despite profitability — classic Japan value trap "
+                          f"candidates or genuine bargains. Cheapest: {'; '.join(details)}",
+                "tickers": below_book["Ticker"].tolist()[:10],
+                "priority": 2,
+            })
+
+    # ── 3. SECTOR CONCENTRATION ──────────────────────────────
+    if "Sector" in df.columns:
+        top_alpha = blended_alpha.nlargest(20)
+        top_tickers = top_alpha.index.tolist()
+        top_sectors = df[df["Ticker"].isin(top_tickers)]["Sector"].value_counts()
+        if len(top_sectors) > 0 and top_sectors.iloc[0] >= 5:
+            dominant = top_sectors.index[0]
+            count = top_sectors.iloc[0]
+            pct = count / len(top_tickers) * 100
+            insights.append({
+                "type": "SECTOR",
+                "title": f"{dominant} dominates top alpha ({count}/{len(top_tickers)} stocks)",
+                "detail": f"{pct:.0f}% of the top 20 alpha-ranked stocks are in {dominant}. "
+                          f"This suggests the sector has strong factor alignment right now. "
+                          f"Consider if this is genuine opportunity or concentration risk.",
+                "tickers": top_tickers,
+                "priority": 2,
+            })
+
+        # Sector rotation — which sectors are cheap vs expensive
+        if "ev_to_ebitda" in df.columns:
+            sect_val = df.groupby("Sector")["ev_to_ebitda"].median().dropna().sort_values()
+            if len(sect_val) >= 3:
+                cheapest_sect = sect_val.head(3)
+                expensive_sect = sect_val.tail(3)
+                insights.append({
+                    "type": "SECTOR",
+                    "title": "Sector valuation spread",
+                    "detail": f"Cheapest sectors by median EV/EBITDA: "
+                              f"{', '.join(f'{s} ({v:.1f}x)' for s, v in cheapest_sect.items())}. "
+                              f"Richest: {', '.join(f'{s} ({v:.1f}x)' for s, v in expensive_sect.items())}.",
+                    "tickers": [],
+                    "priority": 3,
+                })
+
+    # ── 4. HIGH ALPHA + HIGH QUALITY ─────────────────────────
+    if "quality_flags" in df.columns:
+        high_qual = df[df["quality_flags"] >= 5]  # 5+ out of 7
+        if len(high_qual) > 0:
+            hq_alpha = blended_alpha.reindex(high_qual["Ticker"]).dropna().sort_values(ascending=False)
+            top_hq = hq_alpha.head(5)
+            if len(top_hq) > 0:
+                details = []
+                for t in top_hq.index:
+                    row = df[df["Ticker"] == t].iloc[0]
+                    qf = int(row.get("quality_flags", 0))
+                    a = top_hq[t]
+                    details.append(f"{t} (alpha {a:.2f}, quality {qf}/7)")
+                insights.append({
+                    "type": "BUY",
+                    "title": f"High-quality + high-alpha picks",
+                    "detail": f"Stocks scoring 5+ on quality flags AND ranking in top alpha. "
+                              f"These have strong fundamentals confirmed by the model: {'; '.join(details)}",
+                    "tickers": top_hq.index.tolist(),
+                    "priority": 1,
+                })
+
+    # ── 5. MOMENTUM DIVERGENCE ───────────────────────────────
+    # Stocks where fundamental models say BUY but momentum says SELL (or vice versa)
+    rank_alpha = pd.Series(model_sigs.get("FACTOR_RANK", {}).get("alpha", {}))
+    mom_alpha = pd.Series(model_sigs.get("MOMENTUM", {}).get("alpha", {}))
+    if len(rank_alpha) > 0 and len(mom_alpha) > 0:
+        # Value high + momentum low = "falling knife" or "deep value"
+        common = rank_alpha.index.intersection(mom_alpha.index)
+        if len(common) > 10:
+            rank_q = rank_alpha[common].rank(pct=True)
+            mom_q = mom_alpha[common].rank(pct=True)
+            falling = common[(rank_q > 0.8) & (mom_q < 0.2)]
+            if len(falling) >= 2:
+                details = []
+                for t in falling[:5]:
+                    details.append(f"{t} (value rank {rank_q[t]*100:.0f}%, momentum {mom_q[t]*100:.0f}%)")
+                insights.append({
+                    "type": "WARNING",
+                    "title": f"{len(falling)} falling knife candidates",
+                    "detail": f"High value rank but very weak momentum — these may be cheap for a reason. "
+                              f"Wait for momentum to stabilize before entry: {'; '.join(details)}",
+                    "tickers": falling.tolist()[:10],
+                    "priority": 3,
+                })
+
+            # Momentum high + value low = "momentum trap" or "breakout"
+            mo_trap = common[(mom_q > 0.8) & (rank_q < 0.2)]
+            if len(mo_trap) >= 2:
+                details = []
+                for t in mo_trap[:5]:
+                    details.append(f"{t} (momentum {mom_q[t]*100:.0f}%, value {rank_q[t]*100:.0f}%)")
+                insights.append({
+                    "type": "AVOID",
+                    "title": f"{len(mo_trap)} expensive momentum names",
+                    "detail": f"Strong price momentum but poor fundamental value — avoid chasing these unless "
+                              f"you have a growth thesis: {'; '.join(details)}",
+                    "tickers": mo_trap.tolist()[:10],
+                    "priority": 3,
+                })
+
+    # ── 6. DIVIDEND OPPORTUNITIES ────────────────────────────
+    if "dividend_yield" in df.columns and "debt_to_equity" in df.columns:
+        high_div = df[(df["dividend_yield"] > 0.03) & (df["debt_to_equity"] < 100)]
+        if len(high_div) > 0:
+            high_div_sorted = high_div.sort_values("dividend_yield", ascending=False)
+            top_div = high_div_sorted.head(5)
+            details = [f"{r['Ticker']} ({r['dividend_yield']*100:.1f}% yield, D/E {r['debt_to_equity']:.0f})"
+                       for _, r in top_div.iterrows()]
+            insights.append({
+                "type": "OPPORTUNITY",
+                "title": f"{len(high_div)} high-yield stocks with manageable debt",
+                "detail": f"Dividend yield >3% with D/E under 100 — sustainable income candidates: "
+                          f"{'; '.join(details)}",
+                "tickers": high_div_sorted["Ticker"].tolist()[:10],
+                "priority": 3,
+            })
+
+    # ── 7. UNIVERSE HEALTH ───────────────────────────────────
+    if "Screen" in df.columns:
+        pass_rate = (df["Screen"] == "PASS").mean() * 100
+        if pass_rate < 15:
+            insights.append({
+                "type": "WARNING",
+                "title": f"Only {pass_rate:.0f}% of universe passes screens",
+                "detail": "Very few stocks meeting quality + leverage criteria. Market may be "
+                          "overvalued or screens may be too tight. Consider loosening thresholds.",
+                "tickers": [],
+                "priority": 4,
+            })
+        elif pass_rate > 50:
+            insights.append({
+                "type": "OPPORTUNITY",
+                "title": f"{pass_rate:.0f}% of universe passes screens — broad opportunity",
+                "detail": "Unusually high pass rate suggests widespread value availability. "
+                          "Focus on highest-alpha names for best risk/reward.",
+                "tickers": [],
+                "priority": 4,
+            })
+
+    # ── 8. MODEL AGREEMENT LEVEL ─────────────────────────────
+    if len(model_sigs) >= 2:
+        corrs = []
+        names = list(model_sigs.keys())
+        for i in range(len(names)):
+            for j in range(i + 1, len(names)):
+                a1 = pd.Series(model_sigs[names[i]]["alpha"])
+                a2 = pd.Series(model_sigs[names[j]]["alpha"])
+                common = a1.index.intersection(a2.index)
+                if len(common) > 10:
+                    c = a1[common].corr(a2[common])
+                    corrs.append((names[i], names[j], c))
+        if corrs:
+            avg_corr = np.mean([c for _, _, c in corrs])
+            if avg_corr > 0.6:
+                insights.append({
+                    "type": "WARNING",
+                    "title": f"High model correlation ({avg_corr:.2f}) — low diversification",
+                    "detail": "Models are saying similar things. Alpha is concentrated in overlapping signals. "
+                              "This increases conviction but reduces diversification benefit.",
+                    "tickers": [],
+                    "priority": 4,
+                })
+            elif avg_corr < 0.2:
+                insights.append({
+                    "type": "OPPORTUNITY",
+                    "title": f"Low model correlation ({avg_corr:.2f}) — diversified alpha",
+                    "detail": "Models capture different return drivers. Blending them provides robust, "
+                              "diversified alpha that's less likely to draw down simultaneously.",
+                    "tickers": [],
+                    "priority": 4,
+                })
+
+    # Sort by priority
+    insights.sort(key=lambda x: x["priority"])
+    return insights
+
+
 # ── Helpers ────────────────────────────────────────────────────
 
 def _get_close(price_df: pd.DataFrame) -> pd.Series | None:
