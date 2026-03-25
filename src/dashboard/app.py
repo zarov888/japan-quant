@@ -1,5 +1,5 @@
 """
-JVQ Terminal — Bloomberg-style Japan equity screener.
+JVQ Terminal — Bloomberg-style Japan equity screener v2.1.
 """
 from __future__ import annotations
 
