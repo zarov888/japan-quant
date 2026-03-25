@@ -298,9 +298,9 @@ def ml_ensemble_model(
     X = df[available].copy()
     y = df[target_col].copy()
 
-    # Drop rows where target is NaN
-    valid = y.notna() & X.notna().all(axis=1)
-    if valid.sum() < 20:
+    # Drop rows where target is NaN, but impute missing features with median
+    valid_target = y.notna()
+    if valid_target.sum() < 20:
         return ModelSignal(
             name="ML_ENSEMBLE",
             alpha=pd.Series(0.0, index=tickers),
@@ -308,6 +308,12 @@ def ml_ensemble_model(
             metadata={"error": "insufficient_valid_rows"},
         )
 
+    # Impute missing features with column median (keeps more rows)
+    for col in available:
+        median_val = X[col].median()
+        X[col] = X[col].fillna(median_val if pd.notna(median_val) else 0.0)
+
+    valid = valid_target
     X_valid = X[valid].values
     y_valid = y[valid].values
 
@@ -342,11 +348,20 @@ def ml_ensemble_model(
     model.fit(X_scaled, y_valid)
     importances = dict(zip(available, model.feature_importances_))
 
-    # Map predictions back to all tickers
+    # Map cross-val predictions to valid-target rows
     alpha = np.full(len(tickers), np.nan)
     valid_idx = np.where(valid.values)[0]
     for i, idx in enumerate(valid_idx):
         alpha[idx] = predictions[i]
+
+    # Score remaining rows (no target but features available) using fitted model
+    no_target = ~valid_target
+    if no_target.any():
+        X_rest = scaler.transform(X[no_target].values)
+        rest_preds = model.predict(X_rest)
+        rest_idx = np.where(no_target.values)[0]
+        for i, idx in enumerate(rest_idx):
+            alpha[idx] = rest_preds[i]
 
     # Z-score
     mu = np.nanmean(alpha)
@@ -356,7 +371,7 @@ def ml_ensemble_model(
 
     alpha = np.nan_to_num(alpha, nan=0.0)
     alpha_series = pd.Series(alpha, index=tickers)
-    coverage = valid.mean()
+    coverage = (alpha_series != 0.0).mean()
 
     # Sort importances
     sorted_imp = sorted(importances.items(), key=lambda x: x[1], reverse=True)
