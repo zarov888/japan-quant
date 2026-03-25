@@ -4,7 +4,9 @@ JVQ Terminal — Bloomberg-style Japan equity screener v2.1.
 from __future__ import annotations
 
 import io
+import logging
 import sys
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -32,6 +34,22 @@ from src.model.signals import (
     mean_reversion_model, blend_signals, ModelSignal, BlendedSignal,
     quintile_analysis, signal_diagnostics, build_returns_panel,
 )
+
+# ── Log capture ───────────────────────────────────────────────
+if "app_logs" not in st.session_state:
+    st.session_state.app_logs = []
+
+def _log_event(level: str, source: str, msg: str):
+    """Capture log events for the LOGS tab."""
+    st.session_state.app_logs.append({
+        "time": datetime.now().strftime("%H:%M:%S"),
+        "level": level,
+        "source": source,
+        "message": str(msg)[:500],
+    })
+    # Keep last 200 entries
+    if len(st.session_state.app_logs) > 200:
+        st.session_state.app_logs = st.session_state.app_logs[-200:]
 
 # ── Page ───────────────────────────────────────────────────────
 st.set_page_config(page_title="JVQ", layout="wide", initial_sidebar_state="expanded")
@@ -540,10 +558,18 @@ def _compute_alpha(df_hash: str, df_json: str, w_rank: float = 0.40,
         except Exception:
             pass
 
-    sig_rank = factor_rank_model(_df)
-    sig_mom = momentum_model(_df, price_history=price_hist if price_hist else None)
-    sig_ml = ml_ensemble_model(_df, target_col="Composite")
-    sig_rev = mean_reversion_model(_df, price_history=price_hist if price_hist else None)
+    _tickers_idx = _df["Ticker"].values if "Ticker" in _df.columns else _df.index.values
+
+    def _safe_model(fn, name, **kwargs):
+        try:
+            return fn(**kwargs)
+        except Exception as e:
+            return ModelSignal(name=name, alpha=pd.Series(0.0, index=_tickers_idx), coverage=0.0, metadata={"error": str(e)})
+
+    sig_rank = _safe_model(factor_rank_model, "FACTOR_RANK", df=_df)
+    sig_mom = _safe_model(momentum_model, "MOMENTUM", df=_df, price_history=price_hist if price_hist else None)
+    sig_ml = _safe_model(ml_ensemble_model, "ML_ENSEMBLE", df=_df, target_col="Composite")
+    sig_rev = _safe_model(mean_reversion_model, "MEAN_REVERSION", df=_df, price_history=price_hist if price_hist else None)
 
     custom_weights = {
         "FACTOR_RANK": w_rank,
@@ -681,7 +707,7 @@ st.markdown(strip_html([
 
 # ── Tabs ───────────────────────────────────────────────────────
 # Group tabs logically: Core workflow first, then analysis, then tools
-t_scr, t_mdl, t_port, t_opt, t_bt, t_dash, t_idx, t_sec, t_val, t_qual, t_risk, t_tech, t_stk, t_gov, t_pre, t_wl, t_comp, t_exp = st.tabs([
+t_scr, t_mdl, t_port, t_opt, t_bt, t_dash, t_idx, t_sec, t_val, t_qual, t_risk, t_tech, t_stk, t_gov, t_pre, t_wl, t_comp, t_exp, t_log = st.tabs([
     "SCREEN",      # 1. Main screener
     "MODEL",       # 2. Alpha model
     "PORTFOLIO",   # 3. Build portfolio
@@ -700,6 +726,7 @@ t_scr, t_mdl, t_port, t_opt, t_bt, t_dash, t_idx, t_sec, t_val, t_qual, t_risk, 
     "WATCHLIST",   # 16. Tracked positions
     "COMPARE",     # 17. Side-by-side
     "EXPORT",      # 18. Download data
+    "LOGS",        # 19. System logs
 ])
 
 
@@ -2658,7 +2685,10 @@ with t_mdl:
 
     for qi, (qa_col, qa_name, qa_alpha, qa_color) in enumerate(zip(qa_tabs, qa_names, qa_alphas, qa_colors_list)):
         with qa_col:
-            qa_result = quintile_analysis(qa_alpha, df)
+            try:
+                qa_result = quintile_analysis(qa_alpha, df)
+            except Exception:
+                qa_result = {"error": "analysis_failed"}
             if "error" not in qa_result:
                 q_labels = ["Q1", "Q2", "Q3", "Q4", "Q5"]
                 q_scores = [qa_result[q]["avg_metric"] for q in q_labels]
@@ -2679,7 +2709,10 @@ with t_mdl:
     # ── Signal Diagnostics ────────────────────────────────────
     st.markdown("### SIGNAL DIAGNOSTICS")
 
-    diag = signal_diagnostics(_mdl_blended, df)
+    try:
+        diag = signal_diagnostics(_mdl_blended, df)
+    except Exception:
+        diag = {}
     diag_cols = st.columns(6)
     diag_items = [
         ("COVERAGE", f"{diag.get('coverage', 0)*100:.0f}%"),
@@ -2828,9 +2861,59 @@ with t_mdl:
     </span></div>""", unsafe_allow_html=True)
 
 
+# ════════════════════════════════════════════════════════════════
+# LOGS — system status and error log
+# ════════════════════════════════════════════════════════════════
+with t_log:
+    st.markdown("### SYSTEM LOGS")
+
+    # System info
+    _log_event("INFO", "SYSTEM", f"Python {sys.version.split()[0]} | Streamlit {st.__version__} | Universe: {len(df)} stocks | Index: {sel_index}")
+    _log_event("INFO", "MODEL", f"Models: {len(model_sigs)} | Active: {sum(1 for s in model_sigs.values() if s['coverage'] > 0.1)} | Price data: {_alpha_out.get('price_hist_count', 0)} stocks")
+    for mname, mdata in model_sigs.items():
+        cov_pct = mdata["coverage"] * 100
+        meta = mdata["metadata"]
+        if "error" in meta:
+            _log_event("WARN", mname, f"Error: {meta['error']}")
+        else:
+            _log_event("INFO", mname, f"Coverage: {cov_pct:.0f}% | Method: {meta.get('method', '--')} | Components: {meta.get('n_components', meta.get('n_factors', meta.get('n_features', '--')))}")
+
+    # Display logs
+    log_level = st.selectbox("FILTER", ["ALL", "INFO", "WARN", "ERROR"], key="log_filter")
+    logs = st.session_state.app_logs
+    if log_level != "ALL":
+        logs = [l for l in logs if l["level"] == log_level]
+
+    if logs:
+        log_df = pd.DataFrame(logs[::-1])  # newest first
+        # Color-code by level
+        def _color_level(level):
+            return {"INFO": GREEN, "WARN": YELLOW, "ERROR": RED}.get(level, GRAY)
+
+        st.markdown(f'<div style="color:{GRAY};font-size:9px;margin-bottom:4px;">Showing {len(log_df)} entries (newest first)</div>', unsafe_allow_html=True)
+
+        log_html = '<div style="font-family:monospace;font-size:10px;max-height:600px;overflow-y:auto;">'
+        for _, row in log_df.iterrows():
+            color = _color_level(row["level"])
+            log_html += f'<div style="padding:2px 0;border-bottom:1px solid {BORDER};">'
+            log_html += f'<span style="color:{GRAY_DIM};">{row["time"]}</span> '
+            log_html += f'<span style="color:{color};font-weight:600;">[{row["level"]}]</span> '
+            log_html += f'<span style="color:{ORANGE};">{row["source"]}</span> '
+            log_html += f'<span style="color:{WHITE};">{row["message"]}</span>'
+            log_html += '</div>'
+        log_html += '</div>'
+        st.markdown(log_html, unsafe_allow_html=True)
+    else:
+        st.markdown(f'<div style="color:{GRAY};font-size:10px;text-align:center;padding:40px;">No log entries.</div>', unsafe_allow_html=True)
+
+    if st.button("CLEAR LOGS", key="clear_logs"):
+        st.session_state.app_logs = []
+        st.rerun()
+
+
 # ── Footer ─────────────────────────────────────────────────────
 st.markdown(f"""
 <div style="text-align:center; color:{GRAY_DIM}; font-size:8px; padding:8px; border-top:1px solid {BORDER}; margin-top:12px;">
-JVQ TERMINAL v2.0 | BUILT BY NOAH | {len(df)} EQUITIES | {pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")} | DATA: YFINANCE | NOT FINANCIAL ADVICE
+JVQ TERMINAL v2.1 | BUILT BY NOAH | {len(df)} EQUITIES | {pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")} | DATA: YFINANCE | NOT FINANCIAL ADVICE
 </div>
 """, unsafe_allow_html=True)
