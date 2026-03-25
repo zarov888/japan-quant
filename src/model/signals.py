@@ -171,9 +171,9 @@ def momentum_model(
                 if close is not None and len(close) > 21:
                     # 12-1 month momentum (skip last month for reversal)
                     if len(close) > 252:
-                        ret_12m = close.iloc[-21] / close.iloc[-252] - 1
+                        ret_12m = float(close.iloc[-21] / close.iloc[-252] - 1)
                     elif len(close) > 63:
-                        ret_12m = close.iloc[-21] / close.iloc[0] - 1
+                        ret_12m = float(close.iloc[-21] / close.iloc[0] - 1)
                     else:
                         ret_12m = np.nan
                     mom_12_1.append(ret_12m)
@@ -423,7 +423,7 @@ def mean_reversion_model(
                 close = _get_close(ph)
                 if close is not None and len(close) > 21:
                     # 1-month reversal (last 21 trading days return, inverted)
-                    ret_1m = close.iloc[-1] / close.iloc[-21] - 1
+                    ret_1m = float(close.iloc[-1] / close.iloc[-21] - 1)
                     rev_1m.append(-ret_1m)  # losers become winners
 
                     # RSI (14-day)
@@ -435,12 +435,13 @@ def mean_reversion_model(
                     rsi_vals.append(100 - rsi)  # Invert: low RSI = high score
 
                     # Volume spike on down-move (capitulation indicator)
-                    if "Volume" in ph.columns and len(ph) > 21:
-                        vol_recent = float(ph["Volume"].tail(5).mean())
-                        vol_avg = float(ph["Volume"].tail(63).mean())
-                        is_down = ret_1m < 0
-                        spike = (vol_recent / vol_avg - 1) if vol_avg > 0 else 0
-                        vol_spike.append(spike if is_down else 0)
+                    vol_col = _get_volume(ph)
+                    if vol_col is not None and len(vol_col) > 21:
+                        vol_recent = float(vol_col.tail(5).mean())
+                        vol_avg = float(vol_col.tail(63).mean())
+                        is_down = float(ret_1m) < 0
+                        spike = (vol_recent / vol_avg - 1) if vol_avg > 0 else 0.0
+                        vol_spike.append(spike if is_down else 0.0)
                     else:
                         vol_spike.append(np.nan)
                 else:
@@ -700,3 +701,17 @@ def _get_close(price_df: pd.DataFrame) -> pd.Series | None:
     if "Close" in price_df.columns:
         return price_df["Close"]
     return price_df.iloc[:, 0]
+
+
+def _get_volume(price_df: pd.DataFrame) -> pd.Series | None:
+    """Extract volume from potentially MultiIndex DataFrame."""
+    if price_df.empty:
+        return None
+    if isinstance(price_df.columns, pd.MultiIndex):
+        for col in price_df.columns:
+            if "volume" in str(col).lower():
+                return price_df[col]
+        return None
+    if "Volume" in price_df.columns:
+        return price_df["Volume"]
+    return None
